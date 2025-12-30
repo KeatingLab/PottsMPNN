@@ -149,18 +149,12 @@ def parse_PDB(path_to_pdb, input_chain_list=None, ca_only=False, skip_gaps=False
     if input_chain_list:
         chain_alphabet = input_chain_list  
  
-
     biounit_names = [path_to_pdb]
     for biounit in biounit_names:
         my_dict = {}
         s = 0
         concat_seq = ''
-        concat_N = []
-        concat_CA = []
-        concat_C = []
-        concat_O = []
-        concat_mask = []
-        coords_dict = {}
+        chain_order = []
         for letter in chain_alphabet:
             if ca_only:
                 sidechain_atoms = ['CA']
@@ -179,11 +173,13 @@ def parse_PDB(path_to_pdb, input_chain_list=None, ca_only=False, skip_gaps=False
                     coords_dict_chain['C_chain_' + letter] = xyz[:, 2, :].tolist()
                     coords_dict_chain['O_chain_' + letter] = xyz[:, 3, :].tolist()
                 my_dict['coords_chain_'+letter]=coords_dict_chain
+                chain_order.append(letter)
                 s += 1
         fi = biounit.rfind("/")
         my_dict['name']=biounit[(fi+1):-4]
         my_dict['num_of_chains'] = s
         my_dict['seq'] = concat_seq
+        my_dict['chain_order'] = chain_order
         if s <= len(chain_alphabet):
             pdb_dict_list.append(my_dict)
             c+=1
@@ -529,8 +525,10 @@ def loss_nll(S, log_probs, mask):
     loss = criterion(
         log_probs.contiguous().view(-1, log_probs.size(-1)), S.contiguous().view(-1)
     ).view(S.size())
+    S_argmaxed = torch.argmax(log_probs,-1) #[B, L]
+    true_false = (S == S_argmaxed).float()
     loss_av = torch.sum(loss * mask) / torch.sum(mask)
-    return loss, loss_av
+    return loss, loss_av, true_false
 
 def loss_smoothed(S, log_probs, mask, weight=0.1, vocab=21):
     """ Negative log probabilities """

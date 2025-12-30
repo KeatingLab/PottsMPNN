@@ -11,7 +11,8 @@ import matplotlib.colors as mcolors
 from matplotlib.patches import Rectangle
 from matplotlib.collections import LineCollection
 from collections import defaultdict
-from Bio import PDB
+from Bio.PDB import PDBParser, PDBIO
+from Bio.Data.IUPACData import protein_letters_1to3
 import etab_utils as etab_utils
 from potts_mpnn_utils import parse_PDB_seq_only, tied_featurize
 
@@ -198,40 +199,6 @@ def optimize_sequence(seq, etab, E_idx, mask, chain_mask, opt_type, seq_encoder,
         best_seq = S[0]
     return best_seq
 
-def loss_nll(S, probs, mask):
-    """
-    Compute negative log-likelihood loss and prediction accuracy.
-
-    Parameters
-    ----------
-    S : torch.Tensor, shape (B, L)
-        Ground-truth encoded sequences.
-    probs : torch.Tensor, shape (B, L, A)
-        Predicted probabilities over the amino-acid alphabet.
-    mask : torch.Tensor, shape (B, L)
-        Binary mask of valid positions.
-
-    Returns
-    -------
-    loss : torch.Tensor, shape (B, L)
-        Per-position NLL loss (unreduced).
-    loss_av : float
-        Average loss across masked positions.
-    true_false : float
-        Fraction of positions where argmax prediction equals the target.
-    """
-    log_probs = torch.log(probs[:, :, :20])
-    # Pad to allow for 21st special token if present
-    log_probs = F.pad(log_probs, (0, 1), "constant", torch.min(log_probs))
-    criterion = torch.nn.NLLLoss(reduction='none')
-    loss = criterion(
-        log_probs.contiguous().view(-1, log_probs.size(-1)), S.contiguous().view(-1)
-    ).view(S.size())
-    S_argmaxed = torch.argmax(log_probs, -1)  # [B, L]
-    true_false = torch.sum(((S == S_argmaxed) * mask).float()) / torch.sum(mask)
-    loss_av = torch.sum(loss * mask) / torch.sum(mask)
-    return loss, loss_av, true_false
-
 def string_to_int(s):
     """
     Convert a string to an integer by summing character values.
@@ -251,7 +218,6 @@ def string_to_int(s):
         value = ord(char.lower()) - ord('a')  # a=0, b=1, ..., z=25
         result += value
     return result
-
 
 def process_configs(cfg):
     """
@@ -479,6 +445,42 @@ def process_data(cfg, binding_energy_chains):
     
     return pdb_list, pd.DataFrame(mutant_data), chain_lens_dicts
 
+def get_etab(model, pdb_data, cfg, partition):
+    """
+    Get energy table for a given PDB structure.
+    
+    Parameters
+    ----------
+    model : PottsMPNN model
+        Model with which to score sequences
+    pdb_data : dict
+        dict with PDB information
+    cfg : omegacong
+        Config object
+    partition : list (optional, default None)
+        list of chains to analyze
+
+    Returns
+    -------
+    etab : torch.Tensor
+        Energy table
+    E_idx : torch.Tensor
+        Neighbor indices
+    """
+    # Featurize all chains
+    partition_dict = {pdb_data[0]['name']: [partition, []]} if partition else None
+    X, _, mask, _, _, chain_encoding_all, _, _, _, _, _, _, residue_idx, _, _, _, _, _, _, _, _ = tied_featurize(
+        [pdb_data[0]], cfg.dev, partition_dict, None, None, 
+        None, None, None, ca_only=False, vocab=cfg.model.vocab
+    )
+
+    # Run encoder
+    _, E_idx, _, etab = model.run_encoder(X, mask, residue_idx, chain_encoding_all)
+    etab = etab_utils.functionalize_etab(etab, E_idx)
+    pad = (0, 2, 0, 2) # Pad for 'X' and '-' tokens
+    etab = torch.nn.functional.pad(etab, pad, "constant", 0) # Add padding to account for 'X' and '-' tokens
+    return etab, E_idx
+
 def score_seqs(model, cfg, pdb_data, nrgs, seqs, partition=None):
     """
     Score sequences using the energy table.
@@ -507,19 +509,8 @@ def score_seqs(model, cfg, pdb_data, nrgs, seqs, partition=None):
     reference_scores : torch.Tensor, shape (N,)
         References for scored sequences
     """
-
-    # Featurize all chains
-    X, _, mask, _, _, chain_encoding_all, _, _, _, _, _, _, residue_idx, _, _, _, _, _, _, _, _ = tied_featurize(
-        [pdb_data[0]], cfg.dev, partition, None, None, 
-        None, None, None, ca_only=False, vocab=cfg.model.vocab
-    )
-
-    # Run encoder
-    _, E_idx, _, etab = model.run_encoder(X, mask, residue_idx, chain_encoding_all)
-    etab = etab_utils.functionalize_etab(etab, E_idx)
-    pad = (0, 2, 0, 2) # Pad for 'X' and '-' tokens
-    etab = torch.nn.functional.pad(etab, pad, "constant", 0) # Add padding to account for 'X' and '-' tokens
-
+    etab, E_idx = get_etab(model, pdb_data, cfg, partition)
+    
     # Run energy prediction according to config
     if cfg.inference.ddG: # If ddG prediction (default), use wildtype as reference energy
         nrgs = np.insert(nrgs, 0, 0.0)
@@ -781,6 +772,204 @@ def plot_data(data,
     if save_path is not None:
         plt.savefig(save_path, dpi=300, bbox_inches='tight')
     plt.show()
+
+def rewrite_pdb_sequences(pdb_dict, pdb_in_dir, pdb_out_dir):
+    """
+    Save new .pdb files with updated sequences
+    
+    Parameters
+    ----------
+    pdb_dict : dict
+        Keys: "<pdb>|<vis_chains>|<hidden_chains>"
+        Values: (seq_string, sample)
+            seq_string: ':'-separated sequences for vis chains then hidden chains
+            sample: int (unused, but accepted)
+    pdb_in_dir : str
+        Input directory
+    pdb_out_dir : str
+        Output directory
+    """
+    # Reverse map: 1-letter -> 3-letter
+    AA1_TO_AA3 = {k.upper(): v.upper() for k, v in protein_letters_1to3.items()}
+
+    os.makedirs(pdb_out_dir, exist_ok=True)
+    parser = PDBParser(QUIET=True)
+    io = PDBIO()
+
+    for key, (seq_string, _) in pdb_dict.items():
+        # Get chain info
+        chain_info = key.split("|")
+        if len(chain_info) == 3:
+            pdb_name, hidden_chains_str, vis_chains_str = chain_info
+            vis_chains = vis_chains_str.split(":") if vis_chains_str else []
+            hidden_chains = hidden_chains_str.split(":") if hidden_chains_str else []
+            all_chains = hidden_chains + vis_chains
+            if len(vis_chains) > 0:
+                out_name = f"{pdb_name}_{hidden_chains_str.replace(':', '-')}_{vis_chains_str.replace(':', '-')}.pdb"
+            else:
+                out_name = f"{pdb_name}_{hidden_chains_str.replace(':', '-')}.pdb"
+        else:
+            pdb_name = chain_info[0]
+            wt_info = parse_PDB_seq_only(os.path.join(pdb_in_dir, pdb_name + '.pdb'))
+            vis_chains = []
+            all_chains = wt_info['chain_order']
+            out_name = f"{pdb_name}.pdb"
+
+        seqs = seq_string.split(":")
+        if len(seqs) != len(all_chains):
+            raise ValueError(
+                f"Sequence count ({len(seqs)}) does not match chain count "
+                f"({len(all_chains)}) for {key}"
+            )
+
+        structure = parser.get_structure(
+            pdb_name, os.path.join(pdb_in_dir, pdb_name + ".pdb")
+        )
+
+        chain_to_seq = dict(zip(all_chains, seqs))
+
+        for model in structure:
+            for chain in model:
+                chain_id = chain.id
+                if chain_id not in chain_to_seq:
+                    continue
+
+                raw_seq = chain_to_seq[chain_id]
+                is_visible = chain_id in vis_chains
+
+                residues = [
+                    res for res in chain
+                    if res.id[0] == " "
+                ]
+
+                if is_visible:
+                    # ----------------------------
+                    # Visible chain: gap-aware
+                    # ----------------------------
+                    seq_i = 0
+
+                    for res in residues:
+                        if seq_i >= len(raw_seq):
+                            raise ValueError(
+                                f"Sequence too short for visible chain {chain_id} in {key}"
+                            )
+
+                        aa1 = raw_seq[seq_i].upper()
+                        seq_i += 1
+
+                        # Gap → keep original residue
+                        if aa1 == "-":
+                            continue
+
+                        if aa1 not in AA1_TO_AA3:
+                            raise ValueError(
+                                f"Invalid amino acid '{aa1}' in chain {chain_id} in {key}"
+                            )
+
+                        res.resname = AA1_TO_AA3[aa1]
+
+                    if seq_i != len(raw_seq):
+                        raise ValueError(
+                            f"Sequence not fully consumed for visible chain {chain_id} in {key}"
+                        )
+
+                else:
+                    # ----------------------------
+                    # Hidden chain: strip gaps
+                    # ----------------------------
+                    seq = raw_seq.replace("-", "")
+                    if len(seq) != len(residues):
+                        raise ValueError(
+                            f"Length mismatch for hidden chain {chain_id} in {key}: "
+                            f"{len(residues)} residues vs {len(seq)} sequence"
+                        )
+
+                    for res, aa1 in zip(residues, seq):
+                        aa1 = aa1.upper()
+                        if aa1 not in AA1_TO_AA3:
+                            raise ValueError(
+                                f"Invalid amino acid '{aa1}' in chain {chain_id} in {key}"
+                            )
+                        res.resname = AA1_TO_AA3[aa1]
+                        
+        out_path = os.path.join(pdb_out_dir, out_name)
+
+        io.set_structure(structure)
+        io.save(out_path)
+
+def chain_to_partition_map(
+    chain_encoding_all: torch.Tensor,
+    chains: list[str],
+    partitions: list[list[str]],
+) -> torch.Tensor:
+    """
+    Convert chain indices to partition indices.
+
+    Parameters
+    ----------
+    chain_encoding_all : torch.Tensor
+        Shape (1, L), 1-indexed chain indices
+    chains : list[str]
+        Ordered list of chain IDs defining the chain index mapping
+    partitions : list[list[str]]
+        List of chain partitions
+
+    Returns
+    -------
+    partition_encoding_all : torch.Tensor
+        Shape (1, L), 0-indexed partition indices
+    """
+
+    if chain_encoding_all.ndim != 2 or chain_encoding_all.shape[0] != 1:
+        raise ValueError(
+            "chain_encoding_all must have shape (1, L)"
+        )
+
+    # -----------------------------
+    # Validation
+    # -----------------------------
+    chain_set = set(chains)
+
+    part_chain_list = [c for part in partitions for c in part]
+    part_chain_set = set(part_chain_list)
+
+    unknown = part_chain_set - chain_set
+    if unknown:
+        raise ValueError(f"Partitions contain unknown chains: {unknown}")
+
+    missing = chain_set - part_chain_set
+    if missing:
+        raise ValueError(f"Chains not covered by partitions: {missing}")
+
+    if len(part_chain_list) != len(part_chain_set):
+        raise ValueError("A chain appears in more than one partition")
+
+    # -----------------------------
+    # Build chain_idx → partition_idx map
+    # -----------------------------
+    # chain index is 1-indexed
+    # partition index is 0-indexed
+    chain_to_partition = {}
+
+    for p_idx, part in enumerate(partitions):
+        for c in part:
+            chain_to_partition[c] = p_idx
+
+    idx_map = torch.empty(len(chains) + 1, dtype=torch.long)
+
+    for i, chain in enumerate(chains, start=1):
+        idx_map[i] = chain_to_partition[chain]
+
+    # -----------------------------
+    # Remap tensor
+    # -----------------------------
+    if chain_encoding_all.min() < 1 or chain_encoding_all.max() > len(chains):
+        raise ValueError("chain_encoding_all contains invalid chain indices")
+
+    partition_encoding_all = idx_map[chain_encoding_all]
+
+    return partition_encoding_all
+
 
 ### Currently unused functions:
 def best_mutant_per_position(scores: torch.Tensor, sequences: torch.Tensor, threshold: float = 0.0) -> torch.Tensor:

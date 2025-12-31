@@ -56,7 +56,10 @@ def cat_neighbors_nodes(h_nodes, h_neighbors, E_idx):
     h_nn = torch.cat([h_neighbors, h_nodes], -1)
     return h_nn
 
-def optimize_sequence(seq, etab, E_idx, mask, chain_mask, opt_type, seq_encoder, model=None, h_E=None, h_EXV_encoder=None, h_V=None, constant=None, decoding_order=None):
+def optimize_sequence(seq, etab, E_idx, mask, chain_mask, opt_type, seq_encoder,
+                      model=None, h_E=None, h_EXV_encoder=None, h_V=None,
+                      constant=None, decoding_order=None, partition_etabs=None,
+                      partition_index=None, inter_mask=None, binding_optimization=None):
     """
     Sequence optimization wrapper supporting several strategies.
 
@@ -109,7 +112,22 @@ def optimize_sequence(seq, etab, E_idx, mask, chain_mask, opt_type, seq_encoder,
 
                 sort_seqs = torch.stack(sort_seqs, dim=1).to(etab.device)
 
+                # Perform standard stability prediction by default, binding energy if requested
+                if binding_optimization == 'only' and not inter_mask[0, pos]:
+                    continue
+            
                 predicted_E = etab_utils.positional_potts_energy(etab, E_idx, seq, pos)
+                if binding_optimization in ['only', 'both'] and inter_mask[0, pos]:
+                    partition_mask = partition_index == partition_index[0,pos]
+                    partition_seq = seq[:, partition_mask[0]]
+                    partition_pos = partition_mask[:, :pos].sum(dim=1).cpu().item()
+                    partition_etab, partition_E_idx = partition_etabs[partition_index[0, pos].cpu().item()]
+                    unbound_predicted_E = etab_utils.positional_potts_energy(
+                        partition_etab, partition_E_idx, partition_seq, partition_pos
+                    )
+
+                    predicted_E = predicted_E - unbound_predicted_E # Bound - unbound
+
                 seq = sort_seqs[0, predicted_E.argmin()].unsqueeze(0)
                 ener_delta += torch.min(predicted_E)
 
@@ -468,7 +486,12 @@ def get_etab(model, pdb_data, cfg, partition):
         Neighbor indices
     """
     # Featurize all chains
-    partition_dict = {pdb_data[0]['name']: [partition, []]} if partition else None
+    if partition:
+        partition_dict = {pdb_data[0]['name']: [partition, []]}
+        partition_seq = "".join([pdb_data[0][f'seq_chain_{chain}'] for chain in partition])
+        pdb_data[0]['seq'] = partition_seq
+    else:
+        partition_dict = None
     X, _, mask, _, _, chain_encoding_all, _, _, _, _, _, _, residue_idx, _, _, _, _, _, _, _, _ = tied_featurize(
         [pdb_data[0]], cfg.dev, partition_dict, None, None, 
         None, None, None, ca_only=False, vocab=cfg.model.vocab
@@ -955,7 +978,7 @@ def chain_to_partition_map(
         for c in part:
             chain_to_partition[c] = p_idx
 
-    idx_map = torch.empty(len(chains) + 1, dtype=torch.long)
+    idx_map = torch.empty(len(chains) + 1, dtype=torch.long, device=chain_encoding_all.device)
 
     for i, chain in enumerate(chains, start=1):
         idx_map[i] = chain_to_partition[chain]
@@ -970,6 +993,44 @@ def chain_to_partition_map(
 
     return partition_encoding_all
 
+def inter_partition_contact_mask(
+    ca_pos: torch.Tensor,
+    partition_index: torch.Tensor,
+    inter_cutoff: float,
+) -> torch.Tensor:
+    """
+    Identify residues at interface of two partitions
+    
+    Parameters
+    ----------
+    ca_pos : torch.Tensor
+        Shape (b, L, 3), Cα coordinates
+    partition_index : torch.Tensor
+        Shape (b, L), integer partition labels
+    inter_cutoff : float
+        Distance cutoff in Angstroms
+
+    Returns
+    -------
+    inter_mask : torch.Tensor
+        Shape (b, L), mask
+    """
+
+    # Pairwise distances: (b, L, L)
+    diff = ca_pos[:, :, None, :] - ca_pos[:, None, :, :]
+    dist2 = torch.sum(diff ** 2, dim=-1)
+    cutoff2 = inter_cutoff ** 2
+
+    # Different partition mask: (b, L, L)
+    diff_partition = partition_index[:, :, None] != partition_index[:, None, :]
+
+    # Distance cutoff
+    close_enough = dist2 <= cutoff2
+
+    inter_contacts = diff_partition & close_enough
+    inter_mask = inter_contacts.any(dim=-1)
+
+    return inter_mask
 
 ### Currently unused functions:
 def best_mutant_per_position(scores: torch.Tensor, sequences: torch.Tensor, threshold: float = 0.0) -> torch.Tensor:

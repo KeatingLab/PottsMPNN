@@ -250,7 +250,7 @@ def process_configs(cfg):
     -------
     list of configuration dicts or None
     """
-    if os.path.isfile(cfg.inference.fixed_positions_json):
+    if cfg.inference.fixed_positions_json and os.path.isfile(cfg.inference.fixed_positions_json):
         with open(cfg.inference.fixed_positions_json, 'r') as json_file:
             json_list = list(json_file)
         for json_str in json_list:
@@ -258,7 +258,7 @@ def process_configs(cfg):
     else:
         fixed_positions_dict = None
     
-    if os.path.isfile(cfg.inference.pssm_json):
+    if cfg.inference.pssm_json and os.path.isfile(cfg.inference.pssm_json):
         with open(cfg.inference.pssm_json, 'r') as json_file:
             json_list = list(json_file)
         pssm_dict = {}
@@ -268,7 +268,7 @@ def process_configs(cfg):
         pssm_dict = None
     
     
-    if os.path.isfile(cfg.inference.omit_AA_json):
+    if cfg.inference.omit_AA_json and os.path.isfile(cfg.inference.omit_AA_json):
         with open(cfg.inference.omit_AA_json, 'r') as json_file:
             json_list = list(json_file)
         for json_str in json_list:
@@ -277,16 +277,16 @@ def process_configs(cfg):
         omit_AA_dict = None
     
     
-    if os.path.isfile(cfg.inference.bias_AA_json):
+    if cfg.inference.bias_AA_json and os.path.isfile(cfg.inference.bias_AA_json):
         with open(cfg.inference.bias_AA_json, 'r') as json_file:
             json_list = list(json_file)
         for json_str in json_list:
             bias_AA_dict = json.loads(json_str)
     else:
         bias_AA_dict = None
-    
-    
-    if os.path.isfile(cfg.inference.tied_positions_json):
+
+
+    if cfg.inference.tied_positions_json and os.path.isfile(cfg.inference.tied_positions_json):
         with open(cfg.inference.tied_positions_json, 'r') as json_file:
             json_list = list(json_file)
         for json_str in json_list:
@@ -294,7 +294,7 @@ def process_configs(cfg):
     else:
         tied_positions_dict = None
 
-    if os.path.isfile(cfg.inference.bias_by_res_json):
+    if cfg.inference.bias_by_res_json and os.path.isfile(cfg.inference.bias_by_res_json):
         with open(cfg.inference.bias_by_res_json, 'r') as json_file:
             json_list = list(json_file)
     
@@ -321,24 +321,24 @@ def is_float(s):
     except ValueError:
         return None
 
-def process_data(cfg, binding_energy_chains):
+def process_data(cfg, pdb_list, binding_energy_chains):
     """
     Process data settings for energy prediction.
 
     Parameters
     ----------
     cfg : OmegaConf object
+    pdb_list : list of pdb names
     binding_energy_chains : None or dict of chain list pairs for binding energy calculation
 
     Returns
     -------
     dataset_settings : dict of dicts
         Processed dataset settings per pdb
+    chain_lens_dicts : dict of lists
+        Chain lengths per pdb
     """
-    # Load pdb information
-    with open(cfg.input_list, 'r') as f:
-        pdb_list = f.readlines()
-    pdb_list = [line.strip() for line in pdb_list]
+    # Set up data structures
     mutant_data = {'pdb': [], 'sequences': [], 'partitioned_sequences': [], 'ddG_expt': [], 'mut_chains': []}
     chain_lens_dicts = {}
     mut_alphabet = 'ACDEFGHIKLMNPQRSTVWY'
@@ -452,7 +452,7 @@ def process_data(cfg, binding_energy_chains):
             assert sorted(all_chains) == sorted([chain for chain, _ in mutant_data['sequences'][0]]), "Chain partitions must include all chains in structure"
             partitioned_sequences = []
             for partition in binding_energy_chains[pdb]:
-                partitioned_sequences.append(etab_utils.seq_to_tensor("".join([chain_seq for chain, chain_seq in seq if chain in partition]), cfg.dev))
+                partitioned_sequences.append("".join([chain_seq for chain, chain_seq in seq if chain in partition]))
             mutant_data['partitioned_sequences'].append(partitioned_sequences)
     else:
         mutant_data['partitioned_sequences'] = [None] * len(mutant_data['sequences'])
@@ -461,7 +461,7 @@ def process_data(cfg, binding_energy_chains):
     for i_mut in range(len(mutant_data['sequences'])):
         mutant_data['sequences'][i_mut] = "".join([chain_seq for _, chain_seq in mutant_data['sequences'][i_mut]])
     
-    return pdb_list, pd.DataFrame(mutant_data), chain_lens_dicts
+    return pd.DataFrame(mutant_data), chain_lens_dicts
 
 def get_etab(model, pdb_data, cfg, partition):
     """
@@ -484,25 +484,31 @@ def get_etab(model, pdb_data, cfg, partition):
         Energy table
     E_idx : torch.Tensor
         Neighbor indices
+    wt_seq : String
+        Wildtype sequence
     """
     # Featurize all chains
     if partition:
+        full_seq = pdb_data[0]['seq']
         partition_dict = {pdb_data[0]['name']: [partition, []]}
-        partition_seq = "".join([pdb_data[0][f'seq_chain_{chain}'] for chain in partition])
-        pdb_data[0]['seq'] = partition_seq
+        wt_seq = "".join([pdb_data[0][f'seq_chain_{chain}'] for chain in partition])
+        pdb_data[0]['seq'] = wt_seq # Temporarily set sequence to only the partitioned chains for featurization
     else:
         partition_dict = None
+        wt_seq = pdb_data[0]['seq']
     X, _, mask, _, _, chain_encoding_all, _, _, _, _, _, _, residue_idx, _, _, _, _, _, _, _, _ = tied_featurize(
         [pdb_data[0]], cfg.dev, partition_dict, None, None, 
         None, None, None, ca_only=False, vocab=cfg.model.vocab
     )
+    if partition:
+        pdb_data[0]['seq'] = full_seq # Restore full sequence after featurization
 
     # Run encoder
     _, E_idx, _, etab = model.run_encoder(X, mask, residue_idx, chain_encoding_all)
     etab = etab_utils.functionalize_etab(etab, E_idx)
     pad = (0, 2, 0, 2) # Pad for 'X' and '-' tokens
     etab = torch.nn.functional.pad(etab, pad, "constant", 0) # Add padding to account for 'X' and '-' tokens
-    return etab, E_idx
+    return etab, E_idx, wt_seq
 
 def score_seqs(model, cfg, pdb_data, nrgs, seqs, partition=None):
     """
@@ -532,12 +538,12 @@ def score_seqs(model, cfg, pdb_data, nrgs, seqs, partition=None):
     reference_scores : torch.Tensor, shape (N,)
         References for scored sequences
     """
-    etab, E_idx = get_etab(model, pdb_data, cfg, partition)
+    etab, E_idx, wt_seq = get_etab(model, pdb_data, cfg, partition)
     
     # Run energy prediction according to config
     if cfg.inference.ddG: # If ddG prediction (default), use wildtype as reference energy
         nrgs = np.insert(nrgs, 0, 0.0)
-        seqs = np.insert(seqs, 0, pdb_data[0]['seq'])
+        seqs = np.insert(seqs, 0, wt_seq)
     # Transform nrgs and seqs to tensors
     nrgs = torch.from_numpy(np.array(nrgs)).to(dtype=torch.float32, device=cfg.dev).unsqueeze(0)
     seqs = torch.stack([etab_utils.seq_to_tensor(seq) for seq in seqs]).to(dtype=torch.int64, device=cfg.dev).unsqueeze(0)

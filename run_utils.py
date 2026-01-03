@@ -321,15 +321,13 @@ def is_float(s):
     except ValueError:
         return None
 
-def process_data(cfg, pdb_list, binding_energy_chains):
+def process_data(cfg):
     """
     Process data settings for energy prediction.
 
     Parameters
     ----------
     cfg : OmegaConf object
-    pdb_list : list of pdb names
-    binding_energy_chains : None or dict of chain list pairs for binding energy calculation
 
     Returns
     -------
@@ -337,7 +335,25 @@ def process_data(cfg, pdb_list, binding_energy_chains):
         Processed dataset settings per pdb
     chain_lens_dicts : dict of lists
         Chain lengths per pdb
+    pdb_list : list of pdb names
+    binding_energy_chains : None or dict of chain list pairs for binding energy calculation
+
     """
+    # Get pdb info
+    with open(cfg.input_list, 'r') as f:
+        pdb_list = f.readlines()
+    pdb_list = [line.strip() for line in pdb_list]
+
+    # If predicting binding energies, load information about chain separation
+    if cfg.inference.binding_energy_json:
+        with open(cfg.inference.binding_energy_json, 'r') as f:
+            binding_energy_chains = json.load(f)
+        for pdb in pdb_list:
+            if not pdb in binding_energy_chains:
+                binding_energy_chains[pdb] = None
+    else:
+        binding_energy_chains = None
+
     # Set up data structures
     mutant_data = {'pdb': [], 'sequences': [], 'partitioned_sequences': [], 'ddG_expt': [], 'mut_chains': []}
     chain_lens_dicts = {}
@@ -461,7 +477,7 @@ def process_data(cfg, pdb_list, binding_energy_chains):
     for i_mut in range(len(mutant_data['sequences'])):
         mutant_data['sequences'][i_mut] = "".join([chain_seq for _, chain_seq in mutant_data['sequences'][i_mut]])
     
-    return pd.DataFrame(mutant_data), chain_lens_dicts
+    return pd.DataFrame(mutant_data), chain_lens_dicts, pdb_list, binding_energy_chains
 
 def get_etab(model, pdb_data, cfg, partition):
     """

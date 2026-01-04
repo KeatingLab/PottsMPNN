@@ -31,7 +31,7 @@ jupyter notebook
 
 ### Level 3: Command Line Interface (Advanced)
 
-For batch processing or integration into pipelines, run the Python scripts directly using a YAML configuration file.
+For batch processing or integration into pipelines, run the Python scripts directly using a YAML configuration file. Note that the configuration files by default set `dev` to `cuda`. If your system does not have a PyTorch installation with CUDA, you must set `dev` to `cpu`.
 
 
 **Generating Sequences:**

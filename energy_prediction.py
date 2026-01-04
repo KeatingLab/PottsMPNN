@@ -29,7 +29,7 @@ def energy_prediction(args):
         param.requires_grad = False
 
     # Setup dataset settings
-    mutant_data, chain_lens_dicts, pdb_list, binding_energy_chains= process_data(cfg)
+    mutant_data, chain_lens_dicts, pdb_list, binding_energy_chains = process_data(cfg)
 
     # Iterate over PDBs, storing predictions and per-PDB statistics
     scores_df = {'pdb': [], 'mutant': [], 'wildtype': [], 'ddG_pred': [], 'ddG_expt': []}

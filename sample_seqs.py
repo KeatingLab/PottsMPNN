@@ -77,8 +77,8 @@ def sample_seqs(args):
             chain_dict[pdb_info[0] + chain_suffixes[-1]] = [str_split(pdb_info[1], ':'), str_split(pdb_info[2], ':')]
         else: # Set chain_dict to empty list, which means all chains are designed
             chain_dict[pdb_info[0] + chain_suffixes[-1]] = [[], []]
-    if cfg.inference.chain_dict_json is not None:
-        with open(cfg.inference.chain_dict_json, 'r') as f:
+    if cfg.chain_dict_json is not None:
+        with open(cfg.chain_dict_json, 'r') as f:
             chain_dict = json.load(f)
 
     # Load various configuration dictionaries

@@ -3,6 +3,7 @@ out_dir: outputs/example_sequence_outputs
 out_name: sample_run
 input_list: inputs/example_list_sample_seqs.txt
 input_dir: inputs/example_pdbs
+chain_dict_json: null
 model:
   check_path: vanilla_model_weights/pottsmpnn_20.pt
   hidden_dim: 128
@@ -12,7 +13,6 @@ model:
   num_edges: 48
   vocab: 21
 inference:
-  chain_dict_json: null
   num_samples: 1
   temperature: 0.1
   noise: 0.0

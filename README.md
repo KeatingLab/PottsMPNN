@@ -8,7 +8,7 @@ There are three ways to run the model, ranging from easiest (cloud-based) to adv
 
 ### Level 1: Google Colab (Easiest)
 
-Run the model entirely in your browser using Google's free GPU resources. No local installation required.
+Run the model entirely in your browser using Google's free GPU resources. No local installation is required.
 
 * **Sequence Generation:** [Use this file to design new sequences for a backbone](https://colab.research.google.com/drive/1Jx447uZHwi_pvLbzYtdL961vsatAjlnd?usp=sharing)
 * **Energy Prediction:** [Use this file to predict ΔΔG values for specific mutations.](https://colab.research.google.com/drive/1nAWcQXW_GQkyyN0X2s0G68w-8y0wDbpx?usp=sharing)

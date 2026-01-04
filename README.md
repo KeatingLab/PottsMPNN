@@ -190,3 +190,15 @@ etab, E_idx, wt_seq = get_etab(model, pdb_data, cfg, partition)
 sparse_etab = expand_etab(etab, E_idx)
 ```
 `etab` is the dense energy table in shape `[1, L, k, h, h]` where `L` is the sequence length, `k=48`, and `h=22`. `sparse_etab` is the energy table in shape `[1, L, L, h, h]`. `E_idx` contains the neighbor indices for each residue and is of shape `[1, L, k]`.
+
+---
+
+## 5. Energy Benchmark Datasets
+
+The energy datasets used in the paper are located at `\energy_benchmark_datasets`. For Megascale and FireProt, we removed proteins from the datasets that were present in the training set. See the following citations for each dataset:
+* Megascale: K Tsuboyama, et al., Mega-scale experimental analysis of protein folding stability in biology
+and design. Nature 620, 434–444 (2023). [https://doi.org/10.1038/s41586-023-06328-6](https://doi.org/10.1038/s41586-023-06328-6)
+* FireProt: J Stourac, et al., FireProtDB: database of manually curated protein stability data. Nucleic
+Acids Res. 49, D319–D324 (2021). [https://doi.org/10.1093/nar/gkaa981](https://doi.org/10.1093/nar/gkaa981)
+* SARS-CoV-2: TN Starr, et al., Deep Mutational Scanning of SARS-CoV-2 Receptor Binding Domain Reveals
+Constraints on Folding and ACE2 Binding. Cell 182, 1295–1310.e20 (2020). [https://doi.org/10.1016/j.cell.2020.08.012](https://doi.org/10.1016/j.cell.2020.08.012)

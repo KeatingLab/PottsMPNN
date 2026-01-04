@@ -29,7 +29,7 @@ jupyter notebook
 2. Open `sample_seqs.ipynb` for sequence generation.
 3. Open `energy_prediction.ipynb` for mutational scoring.
 
-### Level 3: Command Line Interface (Advanced)
+### Level 3: Command Line Interface
 
 For batch processing or integration into pipelines, run the Python scripts directly using a YAML configuration file. Note that the configuration files by default set `dev` to `cuda`. If your system does not have a PyTorch installation with CUDA, you must set `dev` to `cpu`.
 
@@ -48,7 +48,7 @@ python energy_prediction.py --config inputs/example_config_energy_prediction.yam
 
 ```
 
-For any method, you can verify the installation worked by comparing the outputs to the files in the `\outputs` directory in this repository.
+You can verify the code is working by comparing the outputs to the files in the `\outputs` directory in this repository. Because the sampling temperature affects the sequence generation file, to validate sequence generation update the YAML file to have a very low temperature and validate against `\outputs\example_sequence_outputs\low_temp_cuda.fasta` or `\outputs\example_sequence_outputs\low_temp_cpu.fasta`.
 
 ---
 

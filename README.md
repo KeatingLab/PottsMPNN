@@ -48,7 +48,7 @@ python energy_prediction.py --config inputs/example_config_energy_prediction.yam
 
 ```
 
-For any method, you can verify the installation worked by comparing the outputs to the files in the `\outputs` directory in this repository.
+You can verify the code is working by comparing the outputs to the files in the `\outputs` directory in this repository. Because the sampling temperature affects the sequence generation file, to validate sequence generation update the YAML file to have a very low temperature and validate against `\outputs\example_sequence_outputs\low_temp_cuda.fasta` or `\outputs\example_sequence_outputs\low_temp_cpu.fasta`.
 
 ---
 

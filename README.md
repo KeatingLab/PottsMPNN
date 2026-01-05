@@ -166,7 +166,7 @@ Both pipelines use a configuration dictionary (or YAML file) to control the mode
 
 ---
 
-## 4. PottsMPNN as a replacement for ProteinMPNN
+## 4. PottsMPNN as a Replacement for ProteinMPNN
 
 PottsMPNN was built from the ProteinMPNN architecture and can accomplish any task ProteinMPNN can do. The scripts provided above take advantage of the Potts model learned by PottsMPNN, but you can also use PottsMPNN as a direct ProteinMPNN replacement by removing the `etab_out` layer of PottsMPNN.
 

@@ -687,6 +687,10 @@ def plot_data(data,
         start_r, stop_r = 1, len(full_seq)
         if chain_ranges and c_name in chain_ranges:
             start_r, stop_r = chain_ranges[c_name]
+            if start_r == 0:
+                start_r = 1
+            if stop_r == -1:
+                stop_r = len(full_seq)
         elif chain_ranges:
             continue 
 

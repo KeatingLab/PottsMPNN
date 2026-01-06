@@ -81,9 +81,9 @@ def energy_prediction(args):
     scores_df = pd.DataFrame(scores_df)
     stats_df = pd.DataFrame(stats_df)
     os.makedirs(cfg.out_dir, exist_ok=True)
-    scores_df.to_csv(os.path.join(cfg.out_dir, cfg.out_name + '_scores.csv'))
+    scores_df.to_csv(os.path.join(cfg.out_dir, cfg.out_name + '_scores.csv'), index=None)
     if stats_df['Pearson r'].notna().any():
-        stats_df.to_csv(os.path.join(cfg.out_dir, cfg.out_name + '_stats.csv'))
+        stats_df.to_csv(os.path.join(cfg.out_dir, cfg.out_name + '_stats.csv'), index=None)
 
     # Plot heatmap of results
     heatmap_out_dir = os.path.join(cfg.out_dir, 'heatmaps')

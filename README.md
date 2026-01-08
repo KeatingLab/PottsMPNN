@@ -159,7 +159,6 @@ Both pipelines use a configuration dictionary (or YAML file) to control the mode
 * * **`inference.max_tokens`**: (int) Max tokens to use when batching energy predictions (lower is slower but less memory intensive).
 * **`inference.filter`**: (bool) Whether to only return predictions for mutant sequences with experimental energies.
 * **`inference.binding_energy_json`**: Path to JSON with information about how chains should be separated for binding energy calculation for optimization (required for binding energy optimization). For example, `prot: [[A, B], [C, D]]` indicates that the binding energy should be calculated between the A-B and C-D complexes; `prot: [[A, B], [C], [D]]` indicates that the binding energy should be calculated between the A-B complex and chains C and D.
-* **`inference.binding_energy_cutoff`**: (float) Angstrom cutoff for which residues to optimize with binding energies (binding energies only accurate for residues close to the interface).
 * **`inference.noise`**: (float) Amont of noise to add to structures during inference (model only evaluated with 0 noise).
 * **`inference.skip_gaps`**: (bool) Whether to skip gaps in structure (default False).
 * **`inference.chain_ranges`**: Path to JSON specifying ranges of positions (1-indexed) for heatmap plotting. For example, `prot: {A: [1,50], B: [20:30]}` indicates to plot residues 1 to 50 from chain A and residues 20 to 30 from chain B.

@@ -327,7 +327,7 @@ def sample_seqs(args):
                         decoding_orders[pdb_with_chain_suffix][suffix_key.split('_')[1]] = decoding_order
                     
                 opt_seq = optimize_sequence(
-                    seq_to_opt, etab, E_idx, mask, chain_mask, cfg.inference.optimization_mode, 
+                    seq_to_opt, etab, E_idx, mask*chain_M_pos, chain_mask, cfg.inference.optimization_mode, 
                     etab_utils.seq_to_ints, model, h_E, h_EXV_encoder, h_V, constant, 
                     decoding_order=decoding_order, partition_etabs=partition_etabs, partition_index=partition_index,
                     inter_mask=inter_mask, binding_optimization=cfg.inference.binding_energy_optimization

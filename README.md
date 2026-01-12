@@ -100,6 +100,9 @@ pip install -r requirements.txt
 
 Both pipelines use a configuration dictionary (or YAML file) to control the model. Example configurations can be found in the `inputs/` directory.
 
+### Model weights
+
+We provide vanilla and soluble model weights. For each, we provide three versions of PottsMPNN: one trained with 0.2 Å of noise and MSAs (which we recommend as the default); one trained with 0.3 Å of noise (which performs the best if you do not want to use a model trained with MSAs); and one trained with 0.2 Å of noise (which provides a direct comparison to the default version of ProteinMPNN).
 
 ### Sequence Generation Options (`sample_seqs`)
 
@@ -167,7 +170,7 @@ Both pipelines use a configuration dictionary (or YAML file) to control the mode
 
 ## 4. PottsMPNN as a Replacement for ProteinMPNN
 
-PottsMPNN was built from the ProteinMPNN architecture and can accomplish any task ProteinMPNN can do. The scripts provided above take advantage of the Potts model learned by PottsMPNN, but you can also use PottsMPNN as a direct ProteinMPNN replacement by removing the `etab_out` layer of PottsMPNN.
+PottsMPNN was built from the ProteinMPNN architecture and can accomplish any task ProteinMPNN can do. The scripts provided above take advantage of the Potts model learned by PottsMPNN, but you can also use PottsMPNN as a direct ProteinMPNN replacement using the model weights in `\proteinmpnn_compatible_model_weights`.
 
 ## 5. Extracting Energy Tables
 

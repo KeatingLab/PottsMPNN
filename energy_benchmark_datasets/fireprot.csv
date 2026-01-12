@@ -1,4 +1,4 @@
-WT_name,mut_type,ddG_ML,chain,chain_list,sig,adj_pos
+pdb,mut_type,ddG_ML,chain,chain_list,sig,adj_pos
 1CYO,F34H,-3.11,A,['A'],1CYO_A_F34H,34
 1CYO,F34L,-1.87,A,['A'],1CYO_A_F34L,34
 1CYO,F34Y,0.64,A,['A'],1CYO_A_F34Y,34

@@ -1,4 +1,4 @@
-mut_type,ddG_ML,adj_pos,chain,chain_list,WT_name,sig
+mut_type,ddG_ML,adj_pos,chain,chain_list,pdb,sig
 T333A,-0.37,0,E,"['A', 'E']",6m0j,6m0j_E_T333A
 T333C,-0.93,0,E,"['A', 'E']",6m0j,6m0j_E_T333C
 T333D,-0.27,0,E,"['A', 'E']",6m0j,6m0j_E_T333D

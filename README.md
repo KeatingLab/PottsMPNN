@@ -102,7 +102,7 @@ Both pipelines use a configuration dictionary (or YAML file) to control the mode
 
 ### Model weights
 
-We provide vanilla and soluble model weights. For each, we provide three versions of PottsMPNN: one trained with 0.2 Å of noise and MSAs (which we recommend as the default); one trained with 0.3 Å of noise (which performs the best if you do not want to use a model trained with MSAs); and one trained with 0.2 Å of noise (which provides a direct comparison to the default version of ProteinMPNN).
+We provide vanilla and soluble model weights. For each, we provide three versions of PottsMPNN: one trained with 0.2 Å of noise and MSAs (which we recommend as the default); one trained with 0.3 Å of noise (which performs the best if you do not want to use a model trained with MSAs); and one trained with 0.2 Å of noise (which provides a direct comparison to the default version of ProteinMPNN). Each model is provided at the checkpoint of epoch 100, following the result in Figure 3 of the paper demonstrating that optimal performance on sequence-structure self-consistency and energy prediction is achieved around epoch 100.
 
 ### Sequence Generation Options (`sample_seqs`)
 

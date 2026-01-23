@@ -22,7 +22,9 @@ def sample_seqs(args):
     # Load experiment configuration (OmegaConf file)
     cfg = OmegaConf.load(args.config)
     cfg.model.vocab = 22 if 'msa' in cfg.model.check_path else 21
-    cfg.inference.num_samples = 1 if cfg.inference.optimize_pdb or cfg.inference.optimize_fasta else cfg.inference.num_samples
+    if cfg.inference.temperature == 0: cfg.inference.temperature = 1e-6
+    if cfg.inference.optimization_temperature == 0: cfg.inference.optimization_temperature = 1e-6
+    if cfg.inference.optimize_pdb or cfg.inference.optimize_fasta: cfg.inference.num_samples = 1
     if cfg.inference.optimization_mode == "none": cfg.inference.optimization_mode = ""
 
     print("Loading model checkpoint...")
@@ -95,6 +97,7 @@ def sample_seqs(args):
         for n, AA in enumerate(alphabet):
             if AA in list(bias_AA_dict.keys()):
                 bias_AAs_np[n] = bias_AA_dict[AA]
+    constant_bias = torch.tensor(bias_AAs_np, device=cfg.dev)
 
     print(f"Prepared to process {len(pdb_list)} PDBs.")
 
@@ -328,9 +331,11 @@ def sample_seqs(args):
                     
                 opt_seq = optimize_sequence(
                     seq_to_opt, etab, E_idx, mask*chain_M_pos, chain_mask, cfg.inference.optimization_mode, 
-                    etab_utils.seq_to_ints, model, h_E, h_EXV_encoder, h_V, constant, 
+                    etab_utils.seq_to_ints, cfg.inference.optimization_temperature, constant, constant_bias, 
+                    bias_by_res, cfg.inference.pssm_bias_flag, pssm_coef, pssm_bias, cfg.inference.pssm_multi,
+                    cfg.inference.pssm_log_odds_flag, pssm_log_odds_mask, omit_AA_mask, model, h_E, h_EXV_encoder, h_V, 
                     decoding_order=decoding_order, partition_etabs=partition_etabs, partition_index=partition_index,
-                    inter_mask=inter_mask, binding_optimization=cfg.inference.binding_energy_optimization
+                    inter_mask=inter_mask, binding_optimization=cfg.inference.binding_energy_optimization, vocab=cfg.model.vocab
                 )
                 opt_seq = etab_utils.ints_to_seq_torch(opt_seq)
                 opt_seq = ':'.join(opt_seq[a:b] for a, b in zip(chain_cuts, chain_cuts[1:]))

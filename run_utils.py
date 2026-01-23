@@ -58,10 +58,13 @@ def cat_neighbors_nodes(h_nodes, h_neighbors, E_idx):
     h_nn = torch.cat([h_neighbors, h_nodes], -1)
     return h_nn
 
-def optimize_sequence(seq, etab, E_idx, mask, chain_mask, opt_type, seq_encoder, residue_mask,
+def optimize_sequence(seq, etab, E_idx, mask, chain_mask, opt_type, seq_encoder, optimization_temp=0.0001,
+                      constant=None, constant_bias=None, bias_by_res=None,
+                      pssm_bias_flag=False, pssm_coef=None, pssm_bias=None, pssm_multi=None,
+                      pssm_log_odds_flag=False, pssm_log_odds_mask=None, omit_AA_mask=None,
                       model=None, h_E=None, h_EXV_encoder=None, h_V=None,
-                      constant=None, decoding_order=None, partition_etabs=None,
-                      partition_index=None, inter_mask=None, binding_optimization=None):
+                      decoding_order=None, partition_etabs=None,
+                      partition_index=None, inter_mask=None, binding_optimization=None, vocab=21):
     """
     Sequence optimization wrapper supporting several strategies.
 
@@ -77,14 +80,15 @@ def optimize_sequence(seq, etab, E_idx, mask, chain_mask, opt_type, seq_encoder,
         Optimization strategy indicator (e.g., contains 'nodes' or 'converge').
     seq_encoder : callable
         Function that encodes sequences to integer tensors.
-    residue_mask : torch.Tensor
-        Mask to restrict optimization to certain residues.
+    optimization_temp : float
+        Temperature parameter for optimization sampling.
 
     Returns
     -------
     torch.Tensor or list
         Best sequence (encoded or as characters depending on branch).
     """
+    omit_AA_mask_flag = omit_AA_mask != None
     etab = etab.clone().view(etab.shape[0], etab.shape[1], etab.shape[2], int(np.sqrt(etab.shape[3])), int(np.sqrt(etab.shape[3])))
     etab = torch.nn.functional.pad(etab, (0, 2, 0, 2), "constant", 0)
     seq = torch.Tensor(seq_encoder(seq)).unsqueeze(0).to(dtype=torch.int64, device=E_idx.device)
@@ -129,10 +133,28 @@ def optimize_sequence(seq, etab, E_idx, mask, chain_mask, opt_type, seq_encoder,
 
                     predicted_E = predicted_E - unbound_predicted_E # Bound - unbound
 
-                predicted_E *= residue_mask
-
-                seq = sort_seqs[0, predicted_E.argmin()].unsqueeze(0)
-                ener_delta += torch.min(predicted_E)
+                # Sample from predicted energies
+                predicted_E = predicted_E[:vocab] # Gap should never be chosen if not in model vocab
+                t = torch.tensor([pos], dtype=torch.long, device=E_idx.device)
+                bias_by_res_gathered = torch.gather(bias_by_res, 1, t[:,None,None].repeat(1,1,predicted_E.shape[-1]))[:,0,:] #[B, self.vocab]
+                logits = -predicted_E / optimization_temp
+                probs = F.softmax(logits-constant[None,:]*1e8+constant_bias[None,:]/optimization_temp+bias_by_res_gathered/optimization_temp, dim=-1)
+                if pssm_bias_flag and (pssm_coef.numel()>0) or (pssm_bias.numel()>0):
+                    pssm_coef_gathered = torch.gather(pssm_coef, 1, t[:,None])[:,0]
+                    pssm_bias_gathered = torch.gather(pssm_bias, 1, t[:,None,None].repeat(1,1,pssm_bias.shape[-1]))[:,0]
+                    probs = (1-pssm_multi*pssm_coef_gathered[:,None])*probs + pssm_multi*pssm_coef_gathered[:,None]*pssm_bias_gathered
+                if pssm_log_odds_flag and pssm_log_odds_mask.numel()>0:
+                    pssm_log_odds_mask_gathered = torch.gather(pssm_log_odds_mask, 1, t[:,None, None].repeat(1,1,pssm_log_odds_mask.shape[-1]))[:,0] #[B, self.vocab]
+                    probs_masked = probs*pssm_log_odds_mask_gathered
+                    probs_masked += probs * 0.001
+                    probs = probs_masked/torch.sum(probs_masked, dim=-1, keepdim=True) #[B, self.vocab]
+                if omit_AA_mask_flag and omit_AA_mask.numel()>0:
+                    omit_AA_mask_gathered = torch.gather(omit_AA_mask, 1, t[:,None, None].repeat(1,1,omit_AA_mask.shape[-1]))[:,0] #[B, self.vocab]
+                    probs_masked = probs*(1.0-omit_AA_mask_gathered)
+                    probs = probs_masked/torch.sum(probs_masked, dim=-1, keepdim=True) #[B, self.vocab]
+                mut_res = torch.multinomial(probs, num_samples=1).squeeze(-1)
+                seq = sort_seqs[0, mut_res]
+                ener_delta += predicted_E[mut_res.cpu().item()]
 
             iters_done += 1
         best_seq = seq[0]
@@ -145,13 +167,15 @@ def optimize_sequence(seq, etab, E_idx, mask, chain_mask, opt_type, seq_encoder,
         # Ensure decoding order has batch dimension
         decoding_order = torch.as_tensor(decoding_order, dtype=torch.long, device=h_V.device).unsqueeze(0)
         mask_1D = mask.view([mask.size(0), mask.size(1), 1, 1])
-        mask_bw = torch.ones((mask.size(0), mask.size(1), E_idx.size(2), 1)) * mask_1D
+        mask_bw = torch.ones((mask.size(0), mask.size(1), E_idx.size(2), 1)).to(device=h_V.device) * mask_1D
         mask_bw[:,:,0,0] = 0
         mask_fw = mask_1D * (1 - mask_bw)
         h_EXV_encoder_fw = h_EXV_encoder * mask_fw
 
         for t_ in range(seq.shape[1]):
             t = decoding_order[:, t_]  # [B]
+            if not mask[0,t[0].cpu().item()] or not chain_mask[0,t[0].cpu().item()]:
+                continue
             mask_gathered = torch.gather(mask, 1, t[:, None])  # [B, 1]
 
             if (mask_gathered == 0).all():
@@ -198,15 +222,27 @@ def optimize_sequence(seq, etab, E_idx, mask, chain_mask, opt_type, seq_encoder,
                     layer(h_V_t, h_ESV_t, mask_V=mask_t),
                 )
 
-            # Compute residue probabilities
+            # Compute residue probabilities and sample new residue
             h_V_t = torch.gather(
                 h_V_stack[-1], 1, t[:, None, None].expand(-1, 1, h_V_stack[-1].shape[-1])
             )[:, 0]
-            logits = model.W_out(h_V_t)
-            probs = F.softmax(logits - constant[None, :] * 1e8, dim=-1)
-
-            # Choose best residue (argmax)
-            S_t = torch.argmax(probs, dim=-1, keepdim=True)  # [B, 1]
+            bias_by_res_gathered = torch.gather(bias_by_res, 1, t[:,None,None].repeat(1,1,vocab))[:,0,:] #[B, self.vocab]
+            logits = model.W_out(h_V_t) / optimization_temp
+            probs = F.softmax(logits-constant[None,:]*1e8+constant_bias[None,:]/optimization_temp+bias_by_res_gathered/optimization_temp, dim=-1)
+            if pssm_bias_flag and (pssm_coef.numel()>0) or (pssm_bias.numel()>0):
+                pssm_coef_gathered = torch.gather(pssm_coef, 1, t[:,None])[:,0]
+                pssm_bias_gathered = torch.gather(pssm_bias, 1, t[:,None,None].repeat(1,1,pssm_bias.shape[-1]))[:,0]
+                probs = (1-pssm_multi*pssm_coef_gathered[:,None])*probs + pssm_multi*pssm_coef_gathered[:,None]*pssm_bias_gathered
+            if pssm_log_odds_flag and pssm_log_odds_mask.numel()>0:
+                pssm_log_odds_mask_gathered = torch.gather(pssm_log_odds_mask, 1, t[:,None, None].repeat(1,1,pssm_log_odds_mask.shape[-1]))[:,0] #[B, self.vocab]
+                probs_masked = probs*pssm_log_odds_mask_gathered
+                probs_masked += probs * 0.001
+                probs = probs_masked/torch.sum(probs_masked, dim=-1, keepdim=True) #[B, self.vocab]
+            if omit_AA_mask_flag and omit_AA_mask.numel()>0:
+                omit_AA_mask_gathered = torch.gather(omit_AA_mask, 1, t[:,None, None].repeat(1,1,omit_AA_mask.shape[-1]))[:,0] #[B, self.vocab]
+                probs_masked = probs*(1.0-omit_AA_mask_gathered)
+                probs = probs_masked/torch.sum(probs_masked, dim=-1, keepdim=True) #[B, self.vocab]
+            S_t = torch.multinomial(probs, num_samples=1) # [B, 1]
 
             # Log-probability of chosen residue
             log_p_t = torch.log(torch.gather(probs, 1, S_t) + 1e-8).mean()

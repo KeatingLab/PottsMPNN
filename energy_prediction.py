@@ -66,7 +66,7 @@ def energy_prediction(args):
         scores, scored_seqs, reference_scores = scores.squeeze(0), scored_seqs.squeeze(0), reference_scores.squeeze(0)
 
         # Get sequence scores for unbound state chain partitions (for binding energies only)
-        p_scores = [torch.zeros_like(scores)] * len(partition_flags)
+        p_scores = [torch.zeros_like(scores).unsqueeze(0)] * len(partition_flags)
         for i_p, partition_flag in enumerate(partition_flags):
             if not partition_flag: continue
             p_scores[i_p], _, _ = score_seqs(model, cfg, pdb_data, pdb_mutant_data['ddG_expt'].values, [seqs[i_p] for seqs in pdb_mutant_data['partitioned_sequences'].values], binding_energy_chains[pdb][i_p])

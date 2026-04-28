@@ -1,3 +1,24 @@
+"""
+Code in this file was originally written by or adapted from:
+
+    1) Ingraham et al. "Generative Models for Graph-Based Protein Design" NeurIPS, 2019 
+        - Code: https://github.com/jingraham/neurips19-graph-protein-design
+
+    2) Dauparas et al. "Robust deep learning-based protein sequence design using ProteinMPNN"
+    Science, 2022. doi: 10.1126/science.add2187 
+        - Code: https://github.com/dauparas/ProteinMPNN
+   
+    3) Li et al. "Neural network-derived Potts models for structure-based protein
+    design using backbone atomic coordinates and tertiary motifs"
+    Protein Science, 2023. doi:10.1002/pro.4554
+        - Code: https://github.com/KeatingLab/terminator
+
+    4) Birnbaum and Keating "Beyond native sequence recovery: Improved modeling of the
+    sequence-energy landscape of protein structures"
+    bioRxiv, 2026. doi:10.64898/2026.01.14.699067
+       - Code: https://github.com/KeatingLab/PottsMPNN
+"""
+
 from __future__ import print_function
 import json, time, os, sys, glob
 import shutil
@@ -12,8 +33,6 @@ import torch.nn as nn
 import torch.nn.functional as F
 import random
 import itertools
-
-#A number of functions/classes are adopted from: https://github.com/jingraham/neurips19-graph-protein-design
 
 def parse_fasta(filename,limit=-1, omit=[]):
     header = []

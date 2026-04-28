@@ -1,3 +1,17 @@
+"""
+Code in this file was originally written by or adapted from:
+
+    1) Li et al. "Neural network-derived Potts models for structure-based protein
+    design using backbone atomic coordinates and tertiary motifs"
+    Protein Science, 2023. doi:10.1002/pro.4554
+        - Code: https://github.com/KeatingLab/terminator
+
+    2) Birnbaum and Keating "Beyond native sequence recovery: Improved modeling of the
+    sequence-energy landscape of protein structures"
+    bioRxiv, 2026. doi:10.64898/2026.01.14.699067
+       - Code: https://github.com/KeatingLab/PottsMPNN
+"""
+
 import sys
 import torch
 import numpy as np

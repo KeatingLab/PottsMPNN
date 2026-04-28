@@ -1,3 +1,16 @@
+"""
+Code in this file was originally written by or adapted from:
+
+    1) Dauparas et al. "Robust deep learning-based protein sequence design using ProteinMPNN"
+    Science, 2022. doi: 10.1126/science.add2187 
+        - Code: https://github.com/dauparas/ProteinMPNN
+
+    2) Birnbaum and Keating "Beyond native sequence recovery: Improved modeling of the
+    sequence-energy landscape of protein structures"
+    bioRxiv, 2026. doi:10.64898/2026.01.14.699067
+       - Code: https://github.com/KeatingLab/PottsMPNN
+"""
+
 from tqdm import tqdm
 import os
 import torch

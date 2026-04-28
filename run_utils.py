@@ -1,3 +1,15 @@
+"""
+Code in this file was originally written by or adapted from:
+
+    1) Ingraham et al. "Generative Models for Graph-Based Protein Design" NeurIPS, 2019 
+        - Code: https://github.com/jingraham/neurips19-graph-protein-design
+
+    2) Birnbaum and Keating "Beyond native sequence recovery: Improved modeling of the
+    sequence-energy landscape of protein structures"
+    bioRxiv, 2026. doi:10.64898/2026.01.14.699067
+       - Code: https://github.com/KeatingLab/PottsMPNN
+"""
+
 from tabnanny import verbose
 import torch
 import torch.nn.functional as F

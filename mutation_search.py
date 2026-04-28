@@ -3,6 +3,14 @@
 This module provides a notebook-friendly wrapper that explores combinatorial
 mutations by iteratively scoring all single-site variants, keeping the top
 percentage at each depth, and recursing to the next mutation count.
+
+Code in this file was originally written by or adapted from:
+
+    1) Birnbaum and Keating "Beyond native sequence recovery: Improved modeling of the
+    sequence-energy landscape of protein structures"
+    bioRxiv, 2026. doi:10.64898/2026.01.14.699067
+       - Code: https://github.com/KeatingLab/PottsMPNN
+
 """
 
 from __future__ import annotations

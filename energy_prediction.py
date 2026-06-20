@@ -18,9 +18,9 @@ import pandas as pd
 from tqdm import tqdm
 from itertools import accumulate
 from run_utils import process_data, score_seqs, plot_data
-from potts_mpnn_utils import PottsMPNN, parse_PDB
+from potts_mpnn_utils import PottsMPNN
+from data_utils import parse_PDB
 import etab_utils as etab_utils
-
 
 def energy_prediction(args):
 

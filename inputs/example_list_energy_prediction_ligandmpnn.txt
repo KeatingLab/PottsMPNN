@@ -1,1 +1,2 @@
 swe1_ligand|A:B
+6w25|A:B

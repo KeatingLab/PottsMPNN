@@ -30,7 +30,7 @@ from tqdm import tqdm
 from Bio.PDB import PDBParser, PDBIO
 from Bio.Data.IUPACData import protein_letters_1to3
 import etab_utils as etab_utils
-from potts_mpnn_utils import parse_PDB_seq_only, tied_featurize
+from data_utils import parse_PDB_seq_only, tied_featurize
 
 def gather_nodes(nodes, neighbor_idx):
     """

@@ -13,11 +13,41 @@ import copy
 import torch.nn as nn
 import torch.nn.functional as F
 import random
+import math
 import itertools
 
+def featurize(batch, epoch, msa_seqs=False, msa_batch_size=10):
+    alphabet = 'ACDEFGHIKLMNPQRSTVWYX-'
 
-def featurize(batch, device):
-    alphabet = 'ACDEFGHIKLMNPQRSTVWYX'
+    # In MSA mode, collect the per-MSA-sequence chain sequences without
+    # deep-copying the entire protein entry.  We process the single protein
+    # structure once (B_struct=1) and only build the sequence arrays S/S_true
+    # at B_msa (the number of MSA sequences).
+    msa_chain_seqs = None   # list[list[str]]  – one inner list per MSA copy, each inner list = seqs per chain
+    num_msa_seqs = None
+    if msa_seqs:
+        masked_chains = batch[0]['masked_list']
+        visible_chains = batch[0]['visible_list']
+        all_chains_msa = masked_chains + visible_chains
+        all_seq = ''
+        random.seed(int(epoch + sum(ord(char) for char in batch[0]['name'])))
+        for chain_letter in all_chains_msa:
+            all_seq += batch[0][f'seq_chain_{chain_letter}'][0]
+            random.shuffle(batch[0][f'seq_chain_{chain_letter}'])
+        num_msa_seqs = max(1, math.floor(msa_batch_size / len(all_seq)))
+
+        # Collect MSA sequences per copy (lightweight – just string references)
+        msa_chain_seqs = []
+        for i_seq in range(num_msa_seqs):
+            per_chain = {}
+            for chain_letter in all_chains_msa:
+                pool = batch[0][f'seq_chain_{chain_letter}']
+                per_chain[chain_letter] = pool[i_seq % len(pool)]
+            msa_chain_seqs.append(per_chain)
+
+        # Keep batch as single-element list – process structure ONCE
+        batch = [batch[0]]
+
     B = len(batch)
     lengths = np.array([len(b['seq']) for b in batch], dtype=np.int32) #sum of chain seq lengths
     L_max = max([len(b['seq']) for b in batch])
@@ -25,12 +55,20 @@ def featurize(batch, device):
     residue_idx = -100*np.ones([B, L_max], dtype=np.int32) #residue idx with jumps across chains
     chain_M = np.zeros([B, L_max], dtype=np.int32) #1.0 for the bits that need to be predicted, 0.0 for the bits that are given
     mask_self = np.ones([B, L_max, L_max], dtype=np.int32) #for interface loss calculation - 0.0 for self interaction, 1.0 for other
+
     chain_encoding_all = np.zeros([B, L_max], dtype=np.int32) #integer encoding for chains 0, 0, 0,...0, 1, 1,..., 1, 2, 2, 2...
     S = np.zeros([B, L_max], dtype=np.int32) #sequence AAs integers
+    S_true = np.zeros([B, L_max], dtype=np.int32) #sequence AAs integers
+    all_chain_lens = []
     init_alphabet = ['A', 'B', 'C', 'D', 'E', 'F', 'G','H', 'I', 'J','K', 'L', 'M', 'N', 'O', 'P', 'Q', 'R', 'S', 'T','U', 'V','W','X', 'Y', 'Z', 'a', 'b', 'c', 'd', 'e', 'f', 'g','h', 'i', 'j','k', 'l', 'm', 'n', 'o', 'p', 'q', 'r', 's', 't','u', 'v','w','x', 'y', 'z']
     extra_alphabet = [str(item) for item in list(np.arange(300))]
     chain_letters = init_alphabet + extra_alphabet
+    names = []        
+
+    msa_chain_order = None  # will record the chain order used for the single protein in MSA mode
     for i, b in enumerate(batch):
+        names.append(b['name'])
+        chain_lens = []
         masked_chains = b['masked_list']
         visible_chains = b['visible_list']
         all_chains = masked_chains + visible_chains
@@ -38,6 +76,9 @@ def featurize(batch, device):
         masked_temp_dict = {}
         for step, letter in enumerate(all_chains):
             chain_seq = b[f'seq_chain_{letter}']
+            # In MSA mode seq_chain_X is a list; use first seq for chain dedup check
+            if isinstance(chain_seq, list):
+                chain_seq = chain_seq[0]
             if letter in visible_chains:
                 visible_temp_dict[letter] = chain_seq
             elif letter in masked_chains:
@@ -51,6 +92,8 @@ def featurize(batch, device):
                         visible_chains.remove(kv)
         all_chains = masked_chains + visible_chains
         random.shuffle(all_chains) #randomly shuffle chain order
+        if msa_chain_seqs is not None:
+            msa_chain_order = list(all_chains)  # record for MSA sequence assembly
         num_chains = b['num_of_chains']
         mask_dict = {}
         x_chain_list = []
@@ -63,6 +106,9 @@ def featurize(batch, device):
         for step, letter in enumerate(all_chains):
             if letter in visible_chains:
                 chain_seq = b[f'seq_chain_{letter}']
+                # In MSA mode seq_chain_X is a list of sequences; use first (native) for structure
+                if isinstance(chain_seq, list):
+                    chain_seq = chain_seq[0]
                 chain_length = len(chain_seq)
                 chain_coords = b[f'coords_chain_{letter}'] #this is a dictionary
                 chain_mask = np.zeros(chain_length) #0.0 for visible chains
@@ -76,8 +122,11 @@ def featurize(batch, device):
                 residue_idx[i, l0:l1] = 100*(c-1)+np.arange(l0, l1)
                 l0 += chain_length
                 c+=1
-            elif letter in masked_chains: 
+            elif letter in masked_chains:
                 chain_seq = b[f'seq_chain_{letter}']
+                # In MSA mode seq_chain_X is a list of sequences; use first (native) for structure
+                if isinstance(chain_seq, list):
+                    chain_seq = chain_seq[0]
                 chain_length = len(chain_seq)
                 chain_coords = b[f'coords_chain_{letter}'] #this is a dictionary
                 chain_mask = np.ones(chain_length) #0.0 for visible chains
@@ -91,7 +140,10 @@ def featurize(batch, device):
                 residue_idx[i, l0:l1] = 100*(c-1)+np.arange(l0, l1)
                 l0 += chain_length
                 c+=1
+            chain_lens.append(chain_length)
+        all_chain_lens.append(chain_lens)
         x = np.concatenate(x_chain_list,0) #[L, 4, 3]
+
         all_sequence = "".join(chain_seq_list)
         m = np.concatenate(chain_mask_list,0) #[L,], 1.0 for places that need to be predicted
         chain_encoding = np.concatenate(chain_encoding_list,0)
@@ -99,30 +151,56 @@ def featurize(batch, device):
         l = len(all_sequence)
         x_pad = np.pad(x, [[0,L_max-l], [0,0], [0,0]], 'constant', constant_values=(np.nan, ))
         X[i,:,:,:] = x_pad
-
         m_pad = np.pad(m, [[0,L_max-l]], 'constant', constant_values=(0.0, ))
         chain_M[i,:] = m_pad
 
         chain_encoding_pad = np.pad(chain_encoding, [[0,L_max-l]], 'constant', constant_values=(0.0, ))
         chain_encoding_all[i,:] = chain_encoding_pad
-
         # Convert to labels
         indices = np.asarray([alphabet.index(a) for a in all_sequence], dtype=np.int32)
         S[i, :l] = indices
+        S_true[i, :l] = indices
 
     isnan = np.isnan(X)
     mask = np.isfinite(np.sum(X,(2,3))).astype(np.float32)
     X[isnan] = 0.
 
+    # ---- MSA expansion: build S/S_true at [B_msa, L_max] ----
+    # At this point B=1 for MSA mode. Structure tensors (X, mask, residue_idx,
+    # chain_M, chain_encoding_all, mask_self, backbone) stay at [1, ...].
+    # Only S and S_true are expanded to [num_msa_seqs, L_max].
+    if msa_chain_seqs is not None:
+        B_msa = num_msa_seqs
+        S_msa = np.zeros([B_msa, L_max], dtype=np.int32)
+        S_true_msa = np.zeros([B_msa, L_max], dtype=np.int32)
+        # S[0] already contains the native sequence from the loop above
+        S_true_msa[:] = S[0]  # all MSA copies share the same S_true (native)
+        for i_seq, per_chain in enumerate(msa_chain_seqs):
+            # Assemble the MSA sequence in the same chain order used for structure
+            msa_full_seq = ""
+            for chain_letter in msa_chain_order:
+                msa_full_seq += per_chain[chain_letter]
+            msa_indices = np.asarray([alphabet.index(a) for a in msa_full_seq], dtype=np.int32)
+            l = len(msa_full_seq)
+            S_msa[i_seq, :l] = msa_indices
+        S = S_msa
+        S_true = S_true_msa
+        # Expand mask to [B_msa, L_max] so gap positions (21) are masked per MSA seq
+        mask = np.tile(mask, (B_msa, 1))  # repeat structural mask
+        mask = mask * (S != 21).astype(np.float32)  # zero out gap positions per seq
+        names = [names[0]] * B_msa
+
     # Conversion
-    residue_idx = torch.from_numpy(residue_idx).to(dtype=torch.long,device=device)
-    S = torch.from_numpy(S).to(dtype=torch.long,device=device)
-    X = torch.from_numpy(X).to(dtype=torch.float32, device=device)
-    mask = torch.from_numpy(mask).to(dtype=torch.float32, device=device)
-    mask_self = torch.from_numpy(mask_self).to(dtype=torch.float32, device=device)
-    chain_M = torch.from_numpy(chain_M).to(dtype=torch.float32, device=device)
-    chain_encoding_all = torch.from_numpy(chain_encoding_all).to(dtype=torch.long, device=device)
-    return X, S, mask, lengths, chain_M, residue_idx, mask_self, chain_encoding_all
+    residue_idx = torch.from_numpy(residue_idx).to(dtype=torch.long)
+    S = torch.from_numpy(S).to(dtype=torch.long)
+    S_true = torch.from_numpy(S_true).to(dtype=torch.long)
+    X = torch.from_numpy(X).to(dtype=torch.float32)
+    mask = torch.from_numpy(mask).to(dtype=torch.float32)
+    mask_self = torch.from_numpy(mask_self).to(dtype=torch.float32)
+    chain_M = torch.from_numpy(chain_M).to(dtype=torch.float32)
+    chain_encoding_all = torch.from_numpy(chain_encoding_all).to(dtype=torch.long)
+
+    return (X, S, S_true, mask, lengths, chain_M, residue_idx, mask_self, chain_encoding_all, all_chain_lens, names)
 
 
 def loss_nll(S, log_probs, mask):
@@ -149,6 +227,143 @@ def loss_smoothed(S, log_probs, mask, weight=0.1):
     loss_av = torch.sum(loss * mask) / 2000.0 #fixed 
     return loss, loss_av
 
+def nlcpl(etab, E_idx, S, mask, fixed_denom=0.0):
+    """ Negative log composite psuedo-likelihood
+        Averaged nlcpl per residue, across batches
+        p(a_i,m ; a_j,n) =
+            softmax [
+                E_s(a_i,m) + E_s(a_j,n)
+                + E_p(a_i,m ; a_j,n)
+                + sum_(u != m,n) [
+                    E_p(a_i,m; A_u)
+                    + E_p(A_u, a_j,n)
+                    ]
+                ]
+
+        Returns: log likelihoods per residue, as well as tensor mask
+    """
+    ref_seqs = S
+    x_mask = mask
+
+    n_batch, L, k, _ = etab.shape
+    etab = etab.unsqueeze(-1).view(n_batch, L, k, 20, 20)
+
+    # X is encoded as 20 so lets just add an extra row/col of zeros
+    pad = (0, 2, 0, 2)
+    etab = F.pad(etab, pad, "constant", 0)
+
+    isnt_x_aa = (torch.logical_and(ref_seqs != 20, ref_seqs != 21)).float() # b x L
+
+    # separate selfE and pairE since we have to treat selfE differently
+    self_etab = etab[:, :, 0:1] # b x L x 1 x 22 x 22
+    pair_etab = etab[:, :, 1:] # b x L x 29 x 22 x 22
+
+    # gather 22 self energies by taking the diagonal of the etab
+    self_nrgs_im = torch.diagonal(self_etab, offset=0, dim1=-2, dim2=-1) # b x L x 1 x 22
+    self_nrgs_im_expand = self_nrgs_im.expand(-1, -1, k - 1, -1) # b x L x 29 x 22
+
+    # E_idx for all but self
+    E_idx_jn = E_idx[:, :, 1:] # b x L x 29
+
+    # self Es gathered from E_idx_others
+    E_idx_jn_expand = E_idx_jn.unsqueeze(-1).expand(-1, -1, -1, 22) # b x L x 29 x 22
+    self_nrgs_jn = torch.gather(self_nrgs_im_expand, 1, E_idx_jn_expand) # b x L x 29 x 22
+
+    # idx matrix to gather the identity at all other residues given a residue of focus
+    E_aa = torch.gather(ref_seqs.unsqueeze(-1).expand(-1, -1, k - 1), 1, E_idx_jn) # b x L x 29
+    # expand the matrix so we can gather pair energies
+    E_aa = E_aa.view(list(E_idx_jn.shape) + [1, 1]).expand(-1, -1, -1, 22, -1) # b x L x 29 x 22 x 1
+    # gather the 22 energies for each edge based on E_aa
+    pair_nrgs_jn = torch.gather(pair_etab, 4, E_aa).squeeze(-1) # b x L x 29 x 22
+    # sum_(u != n,m) E_p(a_i,n; A_u)
+    sum_pair_nrgs_jn = torch.sum(pair_nrgs_jn, dim=2) # b x L x 22
+    pair_nrgs_im_u = sum_pair_nrgs_jn.unsqueeze(2).expand(-1, -1, k - 1, -1) - pair_nrgs_jn # b x L x 29 x 22
+
+    # get pair_nrgs_u_jn from pair_nrgs_im_u
+    E_idx_imu_to_ujn = E_idx_jn.unsqueeze(-1).expand(pair_nrgs_im_u.shape) # b x L x 29 x 22
+    pair_nrgs_u_jn = torch.gather(pair_nrgs_im_u, 1, E_idx_imu_to_ujn) # b x L x 29 x 22
+
+    # start building this wacky energy table
+    self_nrgs_im_expand = self_nrgs_im_expand.unsqueeze(-1).expand(-1, -1, -1, -1, 22) # b x L x 29 x 22 x 22
+    self_nrgs_jn_expand = self_nrgs_jn.unsqueeze(-1).expand(-1, -1, -1, -1, 22).transpose(-2, -1) # b x L x 29 x 22 x 22
+    pair_nrgs_im_expand = pair_nrgs_im_u.unsqueeze(-1).expand(-1, -1, -1, -1, 22) # b x L x 29 x 22 x 22
+    pair_nrgs_jn_expand = pair_nrgs_u_jn.unsqueeze(-1).expand(-1, -1, -1, -1, 22).transpose(-2, -1) # b x L x 29 x 22 x 22
+
+    composite_nrgs = (self_nrgs_im_expand + self_nrgs_jn_expand + pair_etab + pair_nrgs_im_expand +
+                      pair_nrgs_jn_expand) # b x L x 29 x 21 x 21
+
+    # convert energies to probabilities
+    composite_nrgs_reshape = composite_nrgs.view(n_batch, L, k - 1, 22 * 22, 1) # b x L x 29 x 484 x 1
+    log_composite_prob_dist = torch.log_softmax(-composite_nrgs_reshape, dim=-2).view(n_batch, L, k - 1, 22, 22) # b x L x 29 x 22 x 22
+    # get the probability of the sequence
+    im_probs = torch.gather(log_composite_prob_dist, 4, E_aa).squeeze(-1) # b x L x 29 x 22
+    ref_seqs_expand = ref_seqs.view(list(ref_seqs.shape) + [1, 1]).expand(-1, -1, k - 1, 1) # b x L x 29 x 1
+    log_edge_probs = torch.gather(im_probs, 3, ref_seqs_expand).squeeze(-1) # b x L x 29
+
+    # reshape masks
+    x_mask = x_mask.unsqueeze(-1) # b x L x 1
+    isnt_x_aa = isnt_x_aa.unsqueeze(-1) # b x L x 1
+    full_mask = x_mask * isnt_x_aa
+    
+    # convert to nlcpl
+    log_edge_probs *= full_mask  # zero out positions that don't have residues or where the native sequence is X
+    
+    n_edges = torch.sum(full_mask.expand(log_edge_probs.shape))
+    if fixed_denom != 0:
+        nlcpl_return = -1*torch.sum(log_edge_probs) / fixed_denom
+    else:
+        nlcpl_return = -1*torch.sum(log_edge_probs) / n_edges
+
+    return nlcpl_return, int(n_edges)
+
+def potts_singlesite_loss(etab, E_idx, S, mask, vocab, weight=0.1, from_val=False):
+    ref_seqs = S
+    n_batch, L, k, _ = etab.shape
+    etab = etab.unsqueeze(-1).view(n_batch, L, k, 20, 20)
+
+    # X is encoded as 20 so lets just add an extra row/col of zeros
+    pad = (0, 1, 0, 1)
+    etab = F.pad(etab, pad, "constant", 0)
+
+    isnt_x_aa = (torch.logical_and(ref_seqs != 20, ref_seqs != 21)).float() # b x L
+    full_mask = mask * isnt_x_aa
+
+    # separate selfE and pairE since we have to treat selfE differently
+    self_etab = torch.diagonal(etab[:, :, 0:1].squeeze(2), dim1=-2, dim2=-1) # b x L x 22
+    pair_etab = etab[:, :, 1:] # b x L x 29 x 22 x 22
+    # E_idx for all but self
+    E_idx_jn = E_idx[:, :, 1:] # b x L x 29
+    # idx matrix to gather the identity at all other residues given a residue of focus
+    E_aa = torch.gather(ref_seqs.unsqueeze(-1).expand(-1, -1, k - 1), 1, E_idx_jn) # b x L x 29
+    # expand the matrix so we can gather pair energies
+    E_aa = E_aa.view(list(E_idx_jn.shape) + [1, 1]).expand(-1, -1, -1, 21, -1) # b x L x 29 x 22 x 1
+    # gather the 22 energies for each edge based on E_aa
+    pair_nrgs_jn = torch.gather(pair_etab, 4, E_aa).squeeze(-1) # b x L x 29 x 22
+    # sum_(u != n,m) E_p(a_i,n; A_u)
+    sum_pair_nrgs_jn = torch.sum(pair_nrgs_jn, dim=2) # b x L x 22
+
+    composite_logits = self_etab + sum_pair_nrgs_jn
+    log_probs = torch.log_softmax(-composite_logits, dim=-1) # b x L x 22
+
+    if from_val:
+        criterion = torch.nn.NLLLoss(reduction='none')
+        loss = criterion(
+            log_probs.contiguous().view(-1, log_probs.size(-1)), S.contiguous().view(-1)
+        ).view(S.size())
+        S_argmaxed = torch.argmax(log_probs,-1) #[B, L]
+        true_false = (S == S_argmaxed).float()
+        loss_av = torch.sum(loss * full_mask) / torch.sum(full_mask)
+        return loss, loss_av, true_false
+    else:
+        S_onehot = torch.nn.functional.one_hot(S, vocab).float()
+
+        # Label smoothing
+        S_onehot = S_onehot + weight / float(S_onehot.size(-1))
+        S_onehot = S_onehot / S_onehot.sum(-1, keepdim=True)
+
+        loss = -(S_onehot * log_probs).sum(-1)
+        loss_av = torch.sum(loss * full_mask) / 2000.0 #fixed 
+        return loss, loss_av
 
 # The following gather functions
 def gather_edges(edges, neighbor_idx):

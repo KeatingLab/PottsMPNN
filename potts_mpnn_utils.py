@@ -34,636 +34,143 @@ import torch.nn.functional as F
 import random
 import itertools
 
-def parse_fasta(filename,limit=-1, omit=[]):
-    header = []
-    sequence = []
-    lines = open(filename, "r")
-    for line in lines:
-        line = line.rstrip()
-        if line[0] == ">":
-            if len(header) == limit:
-                break
-            header.append(line[1:])
-            sequence.append([])
-        else:
-            if omit:
-                line = [item for item in line if item not in omit]
-                line = ''.join(line)
-            line = ''.join(line)
-            sequence[-1].append(line)
-    lines.close()
-    sequence = [''.join(seq) for seq in sequence]
-    return np.array(header), np.array(sequence)
+def nlcpl(etab, E_idx, S, mask, fixed_denom=0.0):
+    """ Negative log composite psuedo-likelihood
+        Averaged nlcpl per residue, across batches
+        p(a_i,m ; a_j,n) =
+            softmax [
+                E_s(a_i,m) + E_s(a_j,n)
+                + E_p(a_i,m ; a_j,n)
+                + sum_(u != m,n) [
+                    E_p(a_i,m; A_u)
+                    + E_p(A_u, a_j,n)
+                    ]
+                ]
 
-def _scores(S, log_probs, mask):
-    """ Negative log probabilities """
-    criterion = torch.nn.NLLLoss(reduction='none')
-    loss = criterion(
-        log_probs.contiguous().view(-1,log_probs.size(-1)),
-        S.contiguous().view(-1)
-    ).view(S.size())
-    scores = torch.sum(loss * mask, dim=-1) / torch.sum(mask, dim=-1)
-    return scores
-
-def _S_to_seq(S, mask):
-    alphabet = 'ACDEFGHIKLMNPQRSTVWYX'
-    seq = ''.join([alphabet[c] for c, m in zip(S.tolist(), mask.tolist()) if m > 0])
-    return seq
-
-def parse_PDB_biounits(x, atoms=['N','CA','C'], chain=None, skip_gaps=False):
-  '''
-  input:  x = PDB filename
-          atoms = atoms to extract (optional)
-  output: (length, atoms, coords=(x,y,z)), sequence
-  '''
-
-  alpha_1 = list("ARNDCQEGHILKMFPSTWYV-")
-  states = len(alpha_1)
-  alpha_3 = ['ALA','ARG','ASN','ASP','CYS','GLN','GLU','GLY','HIS','ILE',
-             'LEU','LYS','MET','PHE','PRO','SER','THR','TRP','TYR','VAL','GAP']
-  
-  aa_1_N = {a:n for n,a in enumerate(alpha_1)}
-  aa_3_N = {a:n for n,a in enumerate(alpha_3)}
-  aa_N_1 = {n:a for n,a in enumerate(alpha_1)}
-  aa_1_3 = {a:b for a,b in zip(alpha_1,alpha_3)}
-  aa_3_1 = {b:a for a,b in zip(alpha_1,alpha_3)}
-  
-  def AA_to_N(x):
-    # ["ARND"] -> [[0,1,2,3]]
-    x = np.array(x);
-    if x.ndim == 0: x = x[None]
-    return [[aa_1_N.get(a, states-1) for a in y] for y in x]
-  
-  def N_to_AA(x):
-    # [[0,1,2,3]] -> ["ARND"]
-    x = np.array(x);
-    if x.ndim == 1: x = x[None]
-    return ["".join([aa_N_1.get(a,"-") for a in y]) for y in x]
-
-  xyz,seq,min_resn,max_resn = {},{},1e6,-1e6
-  for line in open(x,"rb"):
-    line = line.decode("utf-8","ignore").rstrip()
-
-    if line[:6] == "HETATM" and line[17:17+3] == "MSE":
-      line = line.replace("HETATM","ATOM  ")
-      line = line.replace("MSE","MET")
-
-    if line[:4] == "ATOM":
-      ch = line[21:22]
-      if ch == chain or chain is None:
-        atom = line[12:12+4].strip()
-        resi = line[17:17+3]
-        resn = line[22:22+5].strip()
-        x,y,z = [float(line[i:(i+8)]) for i in [30,38,46]]
-
-        if resn[-1].isalpha(): 
-            resa,resn = resn[-1],int(resn[:-1])-1
-        else: 
-            resa,resn = "",int(resn)-1
-#         resn = int(resn)
-        if resn < min_resn: 
-            min_resn = resn
-        if resn > max_resn: 
-            max_resn = resn
-        if resn not in xyz: 
-            xyz[resn] = {}
-        if resa not in xyz[resn]: 
-            xyz[resn][resa] = {}
-        if resn not in seq: 
-            seq[resn] = {}
-        if resa not in seq[resn]: 
-            seq[resn][resa] = resi
-
-        if atom not in xyz[resn][resa]:
-          xyz[resn][resa][atom] = np.array([x,y,z])
-
-  # convert to numpy arrays, fill in missing values
-  seq_,xyz_ = [],[]
-  try:
-      for resn in range(min_resn,max_resn+1):
-        if resn in seq:
-          for k in sorted(seq[resn]): seq_.append(aa_3_N.get(seq[resn][k],20))
-        else:
-            if skip_gaps:
-                continue
-            seq_.append(20)
-        if resn in xyz:
-          for k in sorted(xyz[resn]):
-            for atom in atoms:
-              if atom in xyz[resn][k]: xyz_.append(xyz[resn][k][atom])
-              else: xyz_.append(np.full(3,np.nan))
-        else:
-          for atom in atoms: xyz_.append(np.full(3,np.nan))
-      return np.array(xyz_).reshape(-1,len(atoms),3), N_to_AA(np.array(seq_))
-  except TypeError:
-      return 'no_chain', 'no_chain'
-
-def parse_PDB(path_to_pdb, input_chain_list=None, ca_only=False, skip_gaps=False):
-    c=0
-    pdb_dict_list = []
-    init_alphabet = ['A', 'B', 'C', 'D', 'E', 'F', 'G','H', 'I', 'J','K', 'L', 'M', 'N', 'O', 'P', 'Q', 'R', 'S', 'T','U', 'V','W','X', 'Y', 'Z', 'a', 'b', 'c', 'd', 'e', 'f', 'g','h', 'i', 'j','k', 'l', 'm', 'n', 'o', 'p', 'q', 'r', 's', 't','u', 'v','w','x', 'y', 'z']
-    extra_alphabet = [str(item) for item in list(np.arange(300))]
-    chain_alphabet = init_alphabet + extra_alphabet
-     
-    if input_chain_list:
-        chain_alphabet = input_chain_list  
- 
-    biounit_names = [path_to_pdb]
-    for biounit in biounit_names:
-        my_dict = {}
-        s = 0
-        concat_seq = ''
-        chain_order = []
-        for letter in chain_alphabet:
-            if ca_only:
-                sidechain_atoms = ['CA']
-            else:
-                sidechain_atoms = ['N', 'CA', 'C', 'O']
-            xyz, seq = parse_PDB_biounits(biounit, atoms=sidechain_atoms, chain=letter, skip_gaps=skip_gaps)
-            if type(xyz) != str:
-                concat_seq += seq[0]
-                my_dict['seq_chain_'+letter]=seq[0]
-                coords_dict_chain = {}
-                if ca_only:
-                    coords_dict_chain['CA_chain_'+letter]=xyz.tolist()
-                else:
-                    coords_dict_chain['N_chain_' + letter] = xyz[:, 0, :].tolist()
-                    coords_dict_chain['CA_chain_' + letter] = xyz[:, 1, :].tolist()
-                    coords_dict_chain['C_chain_' + letter] = xyz[:, 2, :].tolist()
-                    coords_dict_chain['O_chain_' + letter] = xyz[:, 3, :].tolist()
-                my_dict['coords_chain_'+letter]=coords_dict_chain
-                chain_order.append(letter)
-                s += 1
-        fi = biounit.rfind("/")
-        my_dict['name']=biounit[(fi+1):-4]
-        my_dict['num_of_chains'] = s
-        my_dict['seq'] = concat_seq
-        my_dict['chain_order'] = chain_order
-        if s <= len(chain_alphabet):
-            pdb_dict_list.append(my_dict)
-            c+=1
-    return pdb_dict_list
-
-def parse_PDB_biounits_seq_only(x, chain=None, skip_gaps=False):
-  '''
-  input:  x = PDB filename
-  output: sequence
-  '''
-
-  alpha_1 = list("ARNDCQEGHILKMFPSTWYV-")
-  alpha_3 = ['ALA','ARG','ASN','ASP','CYS','GLN','GLU','GLY','HIS','ILE',
-             'LEU','LYS','MET','PHE','PRO','SER','THR','TRP','TYR','VAL','GAP']
-  
-  aa_3_N = {a:n for n,a in enumerate(alpha_3)}
-  aa_N_1 = {n:a for n,a in enumerate(alpha_1)}
-  
-  def N_to_AA(x):
-    # [[0,1,2,3]] -> ["ARND"]
-    x = np.array(x);
-    if x.ndim == 1: x = x[None]
-    return ["".join([aa_N_1.get(a,"-") for a in y]) for y in x]
-
-  seq,min_resn,max_resn = {},1e6,-1e6
-  for line in open(x,"rb"):
-    line = line.decode("utf-8","ignore").rstrip()
-
-    if line[:6] == "HETATM" and line[17:17+3] == "MSE":
-      line = line.replace("HETATM","ATOM  ")
-      line = line.replace("MSE","MET")
-
-    if line[:4] == "ATOM":
-      ch = line[21:22]
-      if ch == chain or chain is None:
-        resi = line[17:17+3]
-        resn = line[22:22+5].strip()
-
-        if resn[-1].isalpha(): 
-            resa,resn = resn[-1],int(resn[:-1])-1
-        else: 
-            resa,resn = "",int(resn)-1
-#         resn = int(resn)
-        if resn < min_resn: 
-            min_resn = resn
-        if resn > max_resn: 
-            max_resn = resn
-        if resn not in seq: 
-            seq[resn] = {}
-        if resa not in seq[resn]: 
-            seq[resn][resa] = resi
-
-  # convert to numpy arrays, fill in missing values
-  seq_ = []
-  try:
-      for resn in range(min_resn,max_resn+1):
-        if resn in seq:
-          for k in sorted(seq[resn]): seq_.append(aa_3_N.get(seq[resn][k],20))
-        else:
-            if skip_gaps:
-                continue
-            seq_.append(20)
-      return N_to_AA(np.array(seq_))
-  except TypeError:
-      return 'no_chain'
-
-def parse_PDB_seq_only(path_to_pdb, input_chain_list=None, ca_only=False, skip_gaps=False):
-    init_alphabet = ['A', 'B', 'C', 'D', 'E', 'F', 'G','H', 'I', 'J','K', 'L', 'M', 'N', 'O', 'P', 'Q', 'R', 'S', 'T','U', 'V','W','X', 'Y', 'Z', 'a', 'b', 'c', 'd', 'e', 'f', 'g','h', 'i', 'j','k', 'l', 'm', 'n', 'o', 'p', 'q', 'r', 's', 't','u', 'v','w','x', 'y', 'z']
-    extra_alphabet = [str(item) for item in list(np.arange(300))]
-    chain_alphabet = init_alphabet + extra_alphabet
-     
-    if input_chain_list:
-        chain_alphabet = input_chain_list  
-
-    my_dict = {}
-    chain_order = []
-    concat_seq = ''
-    for letter in chain_alphabet:
-        seq = parse_PDB_biounits_seq_only(path_to_pdb, chain=letter, skip_gaps=skip_gaps)
-        if type(seq) != str:
-            concat_seq += seq[0]
-            my_dict['seq_chain_'+letter]=seq[0]
-            chain_order.append(letter)
-    fi = path_to_pdb.rfind("/")
-    my_dict['name']=path_to_pdb[(fi+1):-4]
-    my_dict['num_of_chains'] = len(chain_order)
-    my_dict['seq'] = concat_seq
-    my_dict['chain_order'] = chain_order
-
-    return my_dict
-
-def tied_featurize(batch, device, chain_dict, fixed_position_dict=None, omit_AA_dict=None, tied_positions_dict=None, pssm_dict=None, bias_by_res_dict=None, ca_only=False, vocab=21):
-    """ Pack and pad batch into torch tensors """
-    alphabet = 'ACDEFGHIKLMNPQRSTVWYX'
-    if vocab == 22:
-        alphabet = 'ACDEFGHIKLMNPQRSTVWYX-'
-    B = len(batch)
-    lengths = np.array([len(b['seq']) for b in batch], dtype=np.int32) #sum of chain seq lengths
-    L_max = max([len(b['seq']) for b in batch])
-    if ca_only:
-        X = np.zeros([B, L_max, 1, 3])
-    else:
-        X = np.zeros([B, L_max, 4, 3])
-    residue_idx = -100*np.ones([B, L_max], dtype=np.int32)
-    chain_M = np.zeros([B, L_max], dtype=np.int32) #1.0 for the bits that need to be predicted
-    pssm_coef_all = np.zeros([B, L_max], dtype=np.float32) #1.0 for the bits that need to be predicted
-    pssm_bias_all = np.zeros([B, L_max, vocab], dtype=np.float32) #1.0 for the bits that need to be predicted
-    pssm_log_odds_all = 10000.0*np.ones([B, L_max, vocab], dtype=np.float32) #1.0 for the bits that need to be predicted
-    chain_M_pos = np.zeros([B, L_max], dtype=np.int32) #1.0 for the bits that need to be predicted
-    bias_by_res_all = np.zeros([B, L_max, vocab], dtype=np.float32)
-    chain_encoding_all = np.zeros([B, L_max], dtype=np.int32) #1.0 for the bits that need to be predicted
-    S = np.zeros([B, L_max], dtype=np.int32)
-    omit_AA_mask = np.zeros([B, L_max, len(alphabet)], dtype=np.int32)
-    # Build the batch
-    letter_list_list = []
-    visible_list_list = []
-    masked_list_list = []
-    masked_chain_length_list_list = []
-    tied_pos_list_of_lists_list = []
-    for i, b in enumerate(batch):
-        if chain_dict != None and len(chain_dict.get(b['name'], None)[0]) > 0:
-            masked_chains, visible_chains = chain_dict[b['name']] #masked_chains a list of chain letters to predict [A, D, F]
-        else:
-            masked_chains = [item[-1:] for item in list(b) if item[:10]=='seq_chain_']
-            visible_chains = []
-        masked_chains.sort() #sort masked_chains 
-        visible_chains.sort() #sort visible_chains 
-        all_chains = masked_chains + visible_chains
-    for i, b in enumerate(batch):
-        mask_dict = {}
-        a = 0
-        x_chain_list = []
-        chain_mask_list = []
-        chain_seq_list = []
-        chain_encoding_list = []
-        c = 1
-        letter_list = []
-        global_idx_start_list = [0]
-        visible_list = []
-        masked_list = []
-        masked_chain_length_list = []
-        fixed_position_mask_list = []
-        omit_AA_mask_list = []
-        pssm_coef_list = []
-        pssm_bias_list = []
-        pssm_log_odds_list = []
-        bias_by_res_list = []
-        l0 = 0
-        l1 = 0
-        chain_lens = []
-        for step, letter in enumerate(all_chains):
-            if letter in visible_chains:
-                letter_list.append(letter)
-                visible_list.append(letter)
-                chain_seq = b[f'seq_chain_{letter}']
-                chain_seq = ''.join([a if a!='-' else 'X' for a in chain_seq])
-                chain_length = len(chain_seq)
-                global_idx_start_list.append(global_idx_start_list[-1]+chain_length)
-                chain_coords = b[f'coords_chain_{letter}'] #this is a dictionary
-                chain_mask = np.zeros(chain_length) #0.0 for visible chains
-                if ca_only:
-                    x_chain = np.array(chain_coords[f'CA_chain_{letter}']) #[chain_lenght,1,3] #CA_diff
-                    if len(x_chain.shape) == 2:
-                        x_chain = x_chain[:,None,:]
-                else:
-                    x_chain = np.stack([chain_coords[c] for c in [f'N_chain_{letter}', f'CA_chain_{letter}', f'C_chain_{letter}', f'O_chain_{letter}']], 1) #[chain_lenght,4,3]
-                x_chain_list.append(x_chain)
-                chain_mask_list.append(chain_mask)
-                chain_seq_list.append(chain_seq)
-                chain_encoding_list.append(c*np.ones(np.array(chain_mask).shape[0]))
-                l1 += chain_length
-                residue_idx[i, l0:l1] = 100*(c-1)+np.arange(l0, l1)
-                l0 += chain_length
-                c+=1
-                fixed_position_mask = np.ones(chain_length)
-                fixed_position_mask_list.append(fixed_position_mask)
-                omit_AA_mask_temp = np.zeros([chain_length, len(alphabet)], np.int32)
-                omit_AA_mask_list.append(omit_AA_mask_temp)
-                pssm_coef = np.zeros(chain_length)
-                pssm_bias = np.zeros([chain_length, vocab])
-                pssm_log_odds = 10000.0*np.ones([chain_length, vocab])
-                pssm_coef_list.append(pssm_coef)
-                pssm_bias_list.append(pssm_bias)
-                pssm_log_odds_list.append(pssm_log_odds)
-                bias_by_res_list.append(np.zeros([chain_length, vocab]))
-            if letter in masked_chains:
-                masked_list.append(letter)
-                letter_list.append(letter)
-                chain_seq = b[f'seq_chain_{letter}']
-                chain_seq = ''.join([a if a!='-' else 'X' for a in chain_seq])
-                chain_length = len(chain_seq)
-                global_idx_start_list.append(global_idx_start_list[-1]+chain_length)
-                masked_chain_length_list.append(chain_length)
-                chain_coords = b[f'coords_chain_{letter}'] #this is a dictionary
-                chain_mask = np.ones(chain_length) #1.0 for masked
-                if ca_only:
-                    x_chain = np.array(chain_coords[f'CA_chain_{letter}']) #[chain_lenght,1,3] #CA_diff
-                    if len(x_chain.shape) == 2:
-                        x_chain = x_chain[:,None,:]
-                else:
-                    x_chain = np.stack([chain_coords[c] for c in [f'N_chain_{letter}', f'CA_chain_{letter}', f'C_chain_{letter}', f'O_chain_{letter}']], 1) #[chain_lenght,4,3]               
-                x_chain_list.append(x_chain)
-                chain_mask_list.append(chain_mask)
-                chain_seq_list.append(chain_seq)
-                chain_encoding_list.append(c*np.ones(np.array(chain_mask).shape[0]))
-                l1 += chain_length
-                residue_idx[i, l0:l1] = 100*(c-1)+np.arange(l0, l1)
-                l0 += chain_length
-                c+=1
-                fixed_position_mask = np.ones(chain_length)
-                if fixed_position_dict!=None:
-                    fixed_pos_list = fixed_position_dict[b['name']][letter]
-                    if fixed_pos_list:
-                        fixed_position_mask[np.array(fixed_pos_list)-1] = 0.0
-                fixed_position_mask_list.append(fixed_position_mask)
-                omit_AA_mask_temp = np.zeros([chain_length, len(alphabet)], np.int32)
-                if omit_AA_dict!=None:
-                    for item in omit_AA_dict[b['name']][letter]:
-                        idx_AA = np.array(item[0])-1
-                        AA_idx = np.array([np.argwhere(np.array(list(alphabet))== AA)[0][0] for AA in item[1]]).repeat(idx_AA.shape[0])
-                        idx_ = np.array([[a, b] for a in idx_AA for b in AA_idx])
-                        omit_AA_mask_temp[idx_[:,0], idx_[:,1]] = 1
-                omit_AA_mask_list.append(omit_AA_mask_temp)
-                pssm_coef = np.zeros(chain_length)
-                pssm_bias = np.zeros([chain_length, vocab])
-                pssm_log_odds = 10000.0*np.ones([chain_length, vocab])
-                if pssm_dict:
-                    if pssm_dict[b['name']][letter]:
-                        pssm_coef = pssm_dict[b['name']][letter]['pssm_coef']
-                        pssm_bias = pssm_dict[b['name']][letter]['pssm_bias']
-                        pssm_log_odds = pssm_dict[b['name']][letter]['pssm_log_odds']
-                pssm_coef_list.append(pssm_coef)
-                pssm_bias_list.append(pssm_bias)
-                pssm_log_odds_list.append(pssm_log_odds)
-                if bias_by_res_dict:
-                    bias_by_res_list.append(bias_by_res_dict[b['name']][letter])
-                else:
-                    bias_by_res_list.append(np.zeros([chain_length, vocab]))
-            chain_lens.append(chain_length)
-       
-        letter_list_np = np.array(letter_list)
-        tied_pos_list_of_lists = []
-        tied_beta = np.ones(L_max)
-        if tied_positions_dict!=None:
-            tied_pos_list = tied_positions_dict[b['name']]
-            if tied_pos_list:
-                set_chains_tied = set(list(itertools.chain(*[list(item) for item in tied_pos_list])))
-                for tied_item in tied_pos_list:
-                    one_list = []
-                    for k, v in tied_item.items():
-                        start_idx = global_idx_start_list[np.argwhere(letter_list_np == k)[0][0]]
-                        if isinstance(v[0], list):
-                            for v_count in range(len(v[0])):
-                                one_list.append(start_idx+v[0][v_count]-1)#make 0 to be the first
-                                tied_beta[start_idx+v[0][v_count]-1] = v[1][v_count]
-                        else:
-                            for v_ in v:
-                                one_list.append(start_idx+v_-1)#make 0 to be the first
-                    tied_pos_list_of_lists.append(one_list)
-        tied_pos_list_of_lists_list.append(tied_pos_list_of_lists)
-
-
- 
-        x = np.concatenate(x_chain_list,0) #[L, 4, 3]
-        all_sequence = "".join(chain_seq_list)
-        m = np.concatenate(chain_mask_list,0) #[L,], 1.0 for places that need to be predicted
-        chain_encoding = np.concatenate(chain_encoding_list,0)
-        m_pos = np.concatenate(fixed_position_mask_list,0) #[L,], 1.0 for places that need to be predicted
-
-        pssm_coef_ = np.concatenate(pssm_coef_list,0) #[L,], 1.0 for places that need to be predicted
-        pssm_bias_ = np.concatenate(pssm_bias_list,0) #[L,], 1.0 for places that need to be predicted
-        pssm_log_odds_ = np.concatenate(pssm_log_odds_list,0) #[L,], 1.0 for places that need to be predicted
-
-        bias_by_res_ = np.concatenate(bias_by_res_list, 0)  #[L,vocab], 0.0 for places where AA frequencies don't need to be tweaked
-
-        l = len(all_sequence)
-        x_pad = np.pad(x, [[0,L_max-l], [0,0], [0,0]], 'constant', constant_values=(np.nan, ))
-        X[i,:,:,:] = x_pad
-
-        m_pad = np.pad(m, [[0,L_max-l]], 'constant', constant_values=(0.0, ))
-        m_pos_pad = np.pad(m_pos, [[0,L_max-l]], 'constant', constant_values=(0.0, ))
-        omit_AA_mask_pad = np.pad(np.concatenate(omit_AA_mask_list,0), [[0,L_max-l], [0,0]], 'constant', constant_values=(0.0, ))
-        chain_M[i,:] = m_pad
-        chain_M_pos[i,:] = m_pos_pad
-        omit_AA_mask[i,] = omit_AA_mask_pad
-
-        chain_encoding_pad = np.pad(chain_encoding, [[0,L_max-l]], 'constant', constant_values=(0.0, ))
-        chain_encoding_all[i,:] = chain_encoding_pad
-
-        pssm_coef_pad = np.pad(pssm_coef_, [[0,L_max-l]], 'constant', constant_values=(0.0, ))
-        pssm_bias_pad = np.pad(pssm_bias_, [[0,L_max-l], [0,0]], 'constant', constant_values=(0.0, ))
-        pssm_log_odds_pad = np.pad(pssm_log_odds_, [[0,L_max-l], [0,0]], 'constant', constant_values=(0.0, ))
-
-        pssm_coef_all[i,:] = pssm_coef_pad
-        pssm_bias_all[i,:] = pssm_bias_pad
-        pssm_log_odds_all[i,:] = pssm_log_odds_pad
-
-        bias_by_res_pad = np.pad(bias_by_res_, [[0,L_max-l], [0,0]], 'constant', constant_values=(0.0, ))
-        bias_by_res_all[i,:] = bias_by_res_pad
-
-        # Convert to labels
-        indices = np.asarray([alphabet.index(a) for a in all_sequence], dtype=np.int32)
-        S[i, :l] = indices
-        letter_list_list.append(letter_list)
-        visible_list_list.append(visible_list)
-        masked_list_list.append(masked_list)
-        masked_chain_length_list_list.append(masked_chain_length_list)
-
-    isnan = np.isnan(X)
-    mask = np.isfinite(np.sum(X,(2,3))).astype(np.float32)
-    X[isnan] = 0.
-
-    # Conversion
-    pssm_coef_all = torch.from_numpy(pssm_coef_all).to(dtype=torch.float32, device=device)
-    pssm_bias_all = torch.from_numpy(pssm_bias_all).to(dtype=torch.float32, device=device)
-    pssm_log_odds_all = torch.from_numpy(pssm_log_odds_all).to(dtype=torch.float32, device=device)
-
-    tied_beta = torch.from_numpy(tied_beta).to(dtype=torch.float32, device=device)
-
-    jumps = ((residue_idx[:,1:]-residue_idx[:,:-1])==1).astype(np.float32)
-    bias_by_res_all = torch.from_numpy(bias_by_res_all).to(dtype=torch.float32, device=device)
-    phi_mask = np.pad(jumps, [[0,0],[1,0]])
-    psi_mask = np.pad(jumps, [[0,0],[0,1]])
-    omega_mask = np.pad(jumps, [[0,0],[0,1]])
-    dihedral_mask = np.concatenate([phi_mask[:,:,None], psi_mask[:,:,None], omega_mask[:,:,None]], -1) #[B,L,3]
-    dihedral_mask = torch.from_numpy(dihedral_mask).to(dtype=torch.float32, device=device)
-    residue_idx = torch.from_numpy(residue_idx).to(dtype=torch.long,device=device)
-    S = torch.from_numpy(S).to(dtype=torch.long,device=device)
-    X = torch.from_numpy(X).to(dtype=torch.float32, device=device)
-    mask = torch.from_numpy(mask).to(dtype=torch.float32, device=device)
-    chain_M = torch.from_numpy(chain_M).to(dtype=torch.float32, device=device)
-    chain_M_pos = torch.from_numpy(chain_M_pos).to(dtype=torch.float32, device=device)
-    omit_AA_mask = torch.from_numpy(omit_AA_mask).to(dtype=torch.float32, device=device)
-    chain_encoding_all = torch.from_numpy(chain_encoding_all).to(dtype=torch.long, device=device)
-    if ca_only:
-        X_out = X[:,:,0]
-    else:
-        X_out = X
-    return X_out, S, mask, lengths, chain_M, chain_encoding_all, letter_list_list, visible_list_list, masked_list_list, masked_chain_length_list_list, chain_M_pos, omit_AA_mask, residue_idx, dihedral_mask, tied_pos_list_of_lists_list, pssm_coef_all, pssm_bias_all, pssm_log_odds_all, bias_by_res_all, tied_beta, chain_lens
-
-def loss_nll(S, log_probs, mask):
-    """ Negative log probabilities """
-    criterion = torch.nn.NLLLoss(reduction='none')
-    loss = criterion(
-        log_probs.contiguous().view(-1, log_probs.size(-1)), S.contiguous().view(-1)
-    ).view(S.size())
-    S_argmaxed = torch.argmax(log_probs,-1) #[B, L]
-    true_false = (S == S_argmaxed).float()
-    loss_av = torch.sum(loss * mask) / torch.sum(mask)
-    return loss, loss_av, true_false
-
-def loss_smoothed(S, log_probs, mask, weight=0.1, vocab=21):
-    """ Negative log probabilities """
-    S_onehot = torch.nn.functional.one_hot(S, vocab).float()
-
-    # Label smoothing
-    S_onehot = S_onehot + weight / float(S_onehot.size(-1))
-    S_onehot = S_onehot / S_onehot.sum(-1, keepdim=True)
-
-    loss = -(S_onehot * log_probs).sum(-1)
-    loss_av = torch.sum(loss * mask) / torch.sum(mask)
-    return loss, loss_av
-
-def nlcpl(etab, E_idx, S, mask):
-    """
-    Negative log composite pseudo-likelihood (NLCPL) per residue.
-
-    Computes a composite pairwise likelihood for each residue by combining
-    self and pairwise energies. The implementation follows the formula in the
-    docstring below and returns per-edge log-probabilities and the averaged
-    negative log composite pseudo-likelihood across valid edges.
-
-    Formula (informal)
-    ------------------
-    p(a_i,m ; a_j,n) = softmax[ E_s(a_i,m) + E_s(a_j,n)
-                                + E_p(a_i,m ; a_j,n)
-                                + sum_{u != m,n} (E_p(a_i,m; A_u) + E_p(A_u, a_j,n)) ]
-
-    Parameters
-    ----------
-    etab : torch.Tensor, shape (B, L, k, h)
-        Energy table.
-    E_idx : torch.Tensor
-        Neighbor index tensor.
-    S : torch.Tensor, shape (B, L)
-        Reference encoded sequences.
-    mask : torch.Tensor, shape (B, L)
-        Binary mask for valid residues.
-
-    Returns
-    -------
-    log_edge_probs : torch.Tensor
-        Per-edge log probabilities (b x L x k-1).
-    nlcpl_return : float
-        Averaged negative log composite pseudo-likelihood across valid edges.
+        Returns: log likelihoods per residue, as well as tensor mask
     """
     ref_seqs = S
     x_mask = mask
 
     n_batch, L, k, _ = etab.shape
-    # Reshape energy table to split out 20x20 residue matrices
     etab = etab.unsqueeze(-1).view(n_batch, L, k, 20, 20)
 
-    # Add padding for special codes (e.g., X or gap) -> expand to 22
+    # X is encoded as 20 so lets just add an extra row/col of zeros
     pad = (0, 2, 0, 2)
     etab = F.pad(etab, pad, "constant", 0)
 
-    isnt_x_aa = (torch.logical_and(ref_seqs != 20, ref_seqs != 21)).float()  # b x L
+    isnt_x_aa = (torch.logical_and(ref_seqs != 20, ref_seqs != 21)).float() # b x L
 
-    # Separate self and pair energies
-    self_etab = etab[:, :, 0:1]  # b x L x 1 x 22 x 22
-    pair_etab = etab[:, :, 1:]   # b x L x (k-1) x 22 x 22
+    # separate selfE and pairE since we have to treat selfE differently
+    self_etab = etab[:, :, 0:1] # b x L x 1 x 22 x 22
+    pair_etab = etab[:, :, 1:] # b x L x 29 x 22 x 22
 
-    # Extract self energies (diagonals) and expand to match neighbor dims
-    self_nrgs_im = torch.diagonal(self_etab, offset=0, dim1=-2, dim2=-1)  # b x L x 1 x 22
-    self_nrgs_im_expand = self_nrgs_im.expand(-1, -1, k - 1, -1)  # b x L x (k-1) x 22
+    # gather 22 self energies by taking the diagonal of the etab
+    self_nrgs_im = torch.diagonal(self_etab, offset=0, dim1=-2, dim2=-1) # b x L x 1 x 22
+    self_nrgs_im_expand = self_nrgs_im.expand(-1, -1, k - 1, -1) # b x L x 29 x 22
 
-    # Gather indices for all neighbors (exclude self edge)
-    E_idx_jn = E_idx[:, :, 1:]  # b x L x (k-1)
+    # E_idx for all but self
+    E_idx_jn = E_idx[:, :, 1:] # b x L x 29
 
-    # Use neighbor indices to gather self energies at neighbor locations
-    E_idx_jn_expand = E_idx_jn.unsqueeze(-1).expand(-1, -1, -1, 22)  # b x L x (k-1) x 22
-    self_nrgs_jn = torch.gather(self_nrgs_im_expand, 1, E_idx_jn_expand)  # b x L x (k-1) x 22
+    # self Es gathered from E_idx_others
+    E_idx_jn_expand = E_idx_jn.unsqueeze(-1).expand(-1, -1, -1, 22) # b x L x 29 x 22
+    self_nrgs_jn = torch.gather(self_nrgs_im_expand, 1, E_idx_jn_expand) # b x L x 29 x 22
 
-    # Gather amino-acids at neighbor positions to index pair energies
-    E_aa = torch.gather(ref_seqs.unsqueeze(-1).expand(-1, -1, k - 1), 1, E_idx_jn)  # b x L x (k-1)
-    E_aa = E_aa.view(list(E_idx_jn.shape) + [1, 1]).expand(-1, -1, -1, 22, -1)  # b x L x (k-1) x 22 x 1
-    pair_nrgs_jn = torch.gather(pair_etab, 4, E_aa).squeeze(-1)  # b x L x (k-1) x 22
+    # idx matrix to gather the identity at all other residues given a residue of focus
+    E_aa = torch.gather(ref_seqs.unsqueeze(-1).expand(-1, -1, k - 1), 1, E_idx_jn) # b x L x 29
+    # expand the matrix so we can gather pair energies
+    E_aa = E_aa.view(list(E_idx_jn.shape) + [1, 1]).expand(-1, -1, -1, 22, -1) # b x L x 29 x 22 x 1
+    # gather the 22 energies for each edge based on E_aa
+    pair_nrgs_jn = torch.gather(pair_etab, 4, E_aa).squeeze(-1) # b x L x 29 x 22
+    # sum_(u != n,m) E_p(a_i,n; A_u)
+    sum_pair_nrgs_jn = torch.sum(pair_nrgs_jn, dim=2) # b x L x 22
+    pair_nrgs_im_u = sum_pair_nrgs_jn.unsqueeze(2).expand(-1, -1, k - 1, -1) - pair_nrgs_jn # b x L x 29 x 22
 
-    # Sum pair energies across neighbors and compute contributions excluding current
-    sum_pair_nrgs_jn = torch.sum(pair_nrgs_jn, dim=2)  # b x L x 22
-    pair_nrgs_im_u = sum_pair_nrgs_jn.unsqueeze(2).expand(-1, -1, k - 1, -1) - pair_nrgs_jn  # b x L x (k-1) x 22
+    # get pair_nrgs_u_jn from pair_nrgs_im_u
+    E_idx_imu_to_ujn = E_idx_jn.unsqueeze(-1).expand(pair_nrgs_im_u.shape) # b x L x 29 x 22
+    pair_nrgs_u_jn = torch.gather(pair_nrgs_im_u, 1, E_idx_imu_to_ujn) # b x L x 29 x 22
 
-    # Map contributions back into neighbor ordering for the composite table
-    E_idx_imu_to_ujn = E_idx_jn.unsqueeze(-1).expand(pair_nrgs_im_u.shape)  # b x L x (k-1) x 22
-    pair_nrgs_u_jn = torch.gather(pair_nrgs_im_u, 1, E_idx_imu_to_ujn)  # b x L x (k-1) x 22
+    # start building this wacky energy table
+    self_nrgs_im_expand = self_nrgs_im_expand.unsqueeze(-1).expand(-1, -1, -1, -1, 22) # b x L x 29 x 22 x 22
+    self_nrgs_jn_expand = self_nrgs_jn.unsqueeze(-1).expand(-1, -1, -1, -1, 22).transpose(-2, -1) # b x L x 29 x 22 x 22
+    pair_nrgs_im_expand = pair_nrgs_im_u.unsqueeze(-1).expand(-1, -1, -1, -1, 22) # b x L x 29 x 22 x 22
+    pair_nrgs_jn_expand = pair_nrgs_u_jn.unsqueeze(-1).expand(-1, -1, -1, -1, 22).transpose(-2, -1) # b x L x 29 x 22 x 22
 
-    # Build full composite energy tensor for each pair of candidate residues
-    self_nrgs_im_expand = self_nrgs_im_expand.unsqueeze(-1).expand(-1, -1, -1, -1, 22)  # b x L x (k-1) x 22 x 22
-    self_nrgs_jn_expand = self_nrgs_jn.unsqueeze(-1).expand(-1, -1, -1, -1, 22).transpose(-2, -1)  # b x L x (k-1) x 22 x 22
-    pair_nrgs_im_expand = pair_nrgs_im_u.unsqueeze(-1).expand(-1, -1, -1, -1, 22)  # b x L x (k-1) x 22 x 22
-    pair_nrgs_jn_expand = pair_nrgs_u_jn.unsqueeze(-1).expand(-1, -1, -1, -1, 22).transpose(-2, -1)  # b x L x (k-1) x 22 x 22
+    composite_nrgs = (self_nrgs_im_expand + self_nrgs_jn_expand + pair_etab + pair_nrgs_im_expand +
+                      pair_nrgs_jn_expand) # b x L x 29 x 21 x 21
 
-    composite_nrgs = (self_nrgs_im_expand + self_nrgs_jn_expand + pair_etab + pair_nrgs_im_expand + pair_nrgs_jn_expand)
+    # convert energies to probabilities
+    composite_nrgs_reshape = composite_nrgs.view(n_batch, L, k - 1, 22 * 22, 1) # b x L x 29 x 484 x 1
+    log_composite_prob_dist = torch.log_softmax(-composite_nrgs_reshape, dim=-2).view(n_batch, L, k - 1, 22, 22) # b x L x 29 x 22 x 22
+    # get the probability of the sequence
+    im_probs = torch.gather(log_composite_prob_dist, 4, E_aa).squeeze(-1) # b x L x 29 x 22
+    ref_seqs_expand = ref_seqs.view(list(ref_seqs.shape) + [1, 1]).expand(-1, -1, k - 1, 1) # b x L x 29 x 1
+    log_edge_probs = torch.gather(im_probs, 3, ref_seqs_expand).squeeze(-1) # b x L x 29
 
-    # Convert composite energies into log-probabilities over residue pairs
-    composite_nrgs_reshape = composite_nrgs.view(n_batch, L, k - 1, 22 * 22, 1)
-    log_composite_prob_dist = torch.log_softmax(-composite_nrgs_reshape, dim=-2).view(n_batch, L, k - 1, 22, 22)
-
-    # Probability of the observed neighbor amino-acid for each candidate at the focus
-    im_probs = torch.gather(log_composite_prob_dist, 4, E_aa).squeeze(-1)  # b x L x (k-1) x 22
-    ref_seqs_expand = ref_seqs.view(list(ref_seqs.shape) + [1, 1]).expand(-1, -1, k - 1, 1)  # b x L x (k-1) x 1
-    log_edge_probs = torch.gather(im_probs, 3, ref_seqs_expand).squeeze(-1)  # b x L x (k-1)
-
-    # Apply masks to zero out invalid positions (gaps or special residues)
-    x_mask = x_mask.unsqueeze(-1)  # b x L x 1
-    isnt_x_aa = isnt_x_aa.unsqueeze(-1)  # b x L x 1
+    # reshape masks
+    x_mask = x_mask.unsqueeze(-1) # b x L x 1
+    isnt_x_aa = isnt_x_aa.unsqueeze(-1) # b x L x 1
     full_mask = x_mask * isnt_x_aa
-
-    log_edge_probs *= full_mask  # zero out invalid entries
-
+    
+    # convert to nlcpl
+    log_edge_probs *= full_mask  # zero out positions that don't have residues or where the native sequence is X
+    
     n_edges = torch.sum(full_mask.expand(log_edge_probs.shape))
-    nlcpl_return = -1 * torch.sum(log_edge_probs) / n_edges
+    if fixed_denom != 0:
+        nlcpl_return = -1*torch.sum(log_edge_probs) / fixed_denom
+    else:
+        nlcpl_return = -1*torch.sum(log_edge_probs) / n_edges
 
-    return log_edge_probs, nlcpl_return
+    return nlcpl_return, log_edge_probs, int(n_edges)
+
+def potts_singlesite_loss(etab, E_idx, S, mask, vocab, weight=0.1, from_val=False):
+    ref_seqs = S
+    n_batch, L, k, _ = etab.shape
+    etab = etab.unsqueeze(-1).view(n_batch, L, k, 20, 20)
+
+    # X is encoded as 20 so lets just add an extra row/col of zeros
+    pad = (0, 1, 0, 1)
+    etab = F.pad(etab, pad, "constant", 0)
+
+    isnt_x_aa = (torch.logical_and(ref_seqs != 20, ref_seqs != 21)).float() # b x L
+    full_mask = mask * isnt_x_aa
+
+    # separate selfE and pairE since we have to treat selfE differently
+    self_etab = torch.diagonal(etab[:, :, 0:1].squeeze(2), dim1=-2, dim2=-1) # b x L x 22
+    pair_etab = etab[:, :, 1:] # b x L x 29 x 22 x 22
+    # E_idx for all but self
+    E_idx_jn = E_idx[:, :, 1:] # b x L x 29
+    # idx matrix to gather the identity at all other residues given a residue of focus
+    E_aa = torch.gather(ref_seqs.unsqueeze(-1).expand(-1, -1, k - 1), 1, E_idx_jn) # b x L x 29
+    # expand the matrix so we can gather pair energies
+    E_aa = E_aa.view(list(E_idx_jn.shape) + [1, 1]).expand(-1, -1, -1, 21, -1) # b x L x 29 x 22 x 1
+    # gather the 22 energies for each edge based on E_aa
+    pair_nrgs_jn = torch.gather(pair_etab, 4, E_aa).squeeze(-1) # b x L x 29 x 22
+    # sum_(u != n,m) E_p(a_i,n; A_u)
+    sum_pair_nrgs_jn = torch.sum(pair_nrgs_jn, dim=2) # b x L x 22
+
+    composite_logits = self_etab + sum_pair_nrgs_jn
+    log_probs = torch.log_softmax(-composite_logits, dim=-1) # b x L x 22
+
+    if from_val:
+        criterion = torch.nn.NLLLoss(reduction='none')
+        loss = criterion(
+            log_probs.contiguous().view(-1, log_probs.size(-1)), S.contiguous().view(-1)
+        ).view(S.size())
+        S_argmaxed = torch.argmax(log_probs,-1) #[B, L]
+        true_false = (S == S_argmaxed).float()
+        loss_av = torch.sum(loss * full_mask) / torch.sum(full_mask)
+        return loss, loss_av, true_false
+    else:
+        S_onehot = torch.nn.functional.one_hot(S, vocab).float()
+
+        # Label smoothing
+        S_onehot = S_onehot + weight / float(S_onehot.size(-1))
+        S_onehot = S_onehot / S_onehot.sum(-1, keepdim=True)
+
+        loss = -(S_onehot * log_probs).sum(-1)
+        loss_av = torch.sum(loss * full_mask) / 2000.0 #fixed 
+        return loss, loss_av
 
 class StructureDataset():
     def __init__(self, jsonl_file, verbose=True, truncate=None, max_length=100,

@@ -22,7 +22,8 @@ from collections import defaultdict
 from itertools import accumulate
 from omegaconf import OmegaConf
 from run_utils import get_etab, optimize_sequence, tied_optimize_sequence, string_to_int, process_configs, cat_neighbors_nodes, rewrite_pdb_sequences, chain_to_partition_map, inter_partition_contact_mask
-from potts_mpnn_utils import PottsMPNN, tied_featurize, nlcpl, parse_PDB, parse_PDB_seq_only, loss_nll
+from potts_mpnn_utils import PottsMPNN, nlcpl
+from data_utils import tied_featurize, parse_PDB, parse_PDB_seq_only, loss_nll
 import etab_utils as etab_utils
 
 def str_split(string, tok):
@@ -248,7 +249,7 @@ def sample_seqs(args):
                 nsr = torch.sum((nsr * mask_for_loss).float()) / torch.sum(mask_for_loss)
                 sample_seq_loss.append(av_seq_loss.cpu().item())
                 sample_nsr.append(nsr.cpu().item())
-                _, av_nlcpl_loss = nlcpl(etab, E_idx, S_true, chain_mask)
+                av_nlcpl_loss, _, _ = nlcpl(etab, E_idx, S_true, chain_mask)
                 sample_nlcpl.append(av_nlcpl_loss.cpu().item())
 
                 # Convert to String

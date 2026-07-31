@@ -1,8 +1,8 @@
 # Iterative Binder Optimization (PottsMPNN → AF3 → PISA)
 
-> Heading levels are set to slot into `README.md` as section 7. Read standalone as-is.
+> Heading levels are set to slot into `README.md` as section 9. Read standalone as-is.
 
-## 7. Iterative Binder Optimization
+## 9. Iterative Binder Optimization
 
 `run_optimization.py` closes the loop between PottsMPNN's mutation search and
 structural validation with AlphaFold3, ipSAE and PISA. Each round explores a
@@ -35,7 +35,7 @@ beats wildtype, or when the iteration budget is exhausted.
 
 ---
 
-### 7.1 External dependencies
+### 9.1 External dependencies
 
 PottsMPNN itself needs only the conda environment from section 2. The structural
 stage shells out to three tools that **must be installed separately**:
@@ -77,7 +77,7 @@ template — the pipeline copies the template per mutant and rewrites
 
 ---
 
-### 7.2 Input files
+### 9.2 Input files
 
 Four inputs beyond the model checkpoint:
 
@@ -119,7 +119,7 @@ elsewhere in PottsMPNN:
 
 ---
 
-### 7.3 Quick start
+### 9.3 Quick start
 
 ```bash
 cp inputs/example_config_optimization.yaml inputs/my_opt.yaml
@@ -146,7 +146,7 @@ python run_optimization.py --config inputs/my_opt.yaml run.max_iterations=5 gati
 
 ---
 
-### 7.4 The one thing you must understand
+### 9.4 PottsMPNN energy comparisons across structures
 
 **PottsMPNN builds a different energy table for every structure.** Its energies
 are therefore only meaningful *within* one structure — a `binding_score` of
@@ -165,16 +165,15 @@ the single point where structures meet — ranks on structural metrics alone.
 Setting `selection.scope: pooled` with more than one seed is rejected by config
 validation.
 
-A consequence: `binding_score` in `round_summary.csv` is provenance, not a
-ranking key. Do not sort a merged summary by it.
+As a consequence, `binding_score` in `round_summary.csv` should not be used to sort a merged summary.
 
-Related: search scores are also **not comparable across rounds**, because
+On a related note, search scores are also **not comparable across rounds**, because
 `run.backbone_source: af3` gives each round a different backbone. Track progress
 with ipSAE/PISA, which share one fixed wildtype baseline.
 
 ---
 
-### 7.5 Configuration reference
+### 9.5 Configuration reference
 
 #### `run` — top level
 
@@ -419,7 +418,7 @@ computed and still counts toward `beats_wt_on`, it just cannot end the run.
 
 ---
 
-### 7.6 Controlling how many sequences get scored
+### 9.6 Controlling how many sequences get scored
 
 Within one search, the number of sequences **scored** at depth *d* is
 `(kept at depth d−1) × (mutable positions × 19)`. Cost grows with *depth*, not
@@ -455,7 +454,7 @@ Each round logs its budget and a ceiling before spending GPU time:
 
 ---
 
-### 7.7 Output layout
+### 9.7 Output layout
 
 ```
 <out_dir>/
@@ -482,7 +481,7 @@ required. Reverting a mutation makes it disappear from the list.
 
 ---
 
-### 7.8 Resuming
+### 9.8 Resuming
 
 Every stage records a completion marker, so a preempted run continues where it
 stopped:
@@ -499,7 +498,7 @@ up as an unscored candidate with a warning, not a crash).
 
 ---
 
-### 7.9 Troubleshooting
+### 9.9 Troubleshooting
 
 | Symptom | Cause |
 |---|---|
@@ -518,7 +517,7 @@ up as an unscored candidate with a warning, not a crash).
 
 ---
 
-### 7.10 Reading the results
+### 9.10 Reading the results
 
 With `run.report: true` (the default) the loop writes `<out_dir>/report/` when it
 finishes — however it finishes, including an early stop:
@@ -560,7 +559,7 @@ Set `report_each_round: true` to refresh it after every round and watch a long
 run in flight. Report generation never sinks a run: results are already on disk,
 so a plotting failure is warned about and swallowed.
 
-### 7.11 Tests
+### 9.11 Tests
 
 The loop's logic is testable without torch, a GPU, or cluster access — PottsMPNN
 scoring and the AF3 pipeline are stubbed, while backbone preparation, selection,

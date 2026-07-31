@@ -214,9 +214,15 @@ Acids Res. 49, D319–D324 (2021). [https://doi.org/10.1093/nar/gkaa981](https:/
 * SARS-CoV-2: TN Starr, et al., Deep Mutational Scanning of SARS-CoV-2 Receptor Binding Domain Reveals
 Constraints on Folding and ACE2 Binding. Cell 182, 1295–1310.e20 (2020). [https://doi.org/10.1016/j.cell.2020.08.012](https://doi.org/10.1016/j.cell.2020.08.012)
 
----
+## 7. MSA training data
 
-## 7. Iterative Binder Optimization (AF3 + PISA)
+The MSAs used to train PottsMPNN are available here: [https://huggingface.co/datasets/FosterBirnbaum/PottsMPNN_Training_MSAs](https://huggingface.co/datasets/FosterBirnbaum/PottsMPNN_Training_MSAs).
+
+## 8. Note on TM-score calculations in the paper
+
+For multichain structures in the benchmark datasets in the paper, the TM-score reported is the average per-chain TM-score between the predicted and native structures.
+
+## 9. Iterative Binder Optimization (AF3 + PISA)
 
 `run_optimization.py` runs a closed optimization loop: a PottsMPNN mutation search over a Pareto front of stability × binding, structural validation of the top mutants with AlphaFold3 + ipSAE + PISA, promotion of those that beat wildtype, and re-seeding of the next round from their predicted structures — for a configurable number of iterations or until an ipSAE/PISA cutoff is met.
 

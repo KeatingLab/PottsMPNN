@@ -1,0 +1,198 @@
+# Iterative Pareto optimization loop.
+#
+#   python run_optimization.py --config inputs/example_config_optimization.yaml
+#
+# Each round: mutation search -> select folding set -> AF3 + PISA + ipSAE ->
+# promote mutants beating wildtype -> re-seed. Stops on cutoff or max_iterations.
+
+run:
+  # Fresh directory: the truncated target is a DIFFERENT structure, so its Potts
+  # energies are not comparable to the full-length run, and its AF3 job names
+  # would otherwise collide with cached full-length results.
+  out_dir: outputs/350d_binder12_trunc_optimization
+  out_name: 350d_binder12_trunc_opt
+  max_iterations: 5
+  executor: local            # local | slurm
+  backbone_source: af3       # af3 = search the predicted structure of each seed
+  seed: 0
+  force: false               # true discards resume markers and recomputes
+  # Write <out_dir>/report/ at the end of the run: a self-contained report.html
+  # (progression, Pareto trade-off, lineage of the best mutants, mutation
+  # convergence) plus a ranked best_mutants.csv. Generated however the run ends,
+  # including an early stop; a failure here is warned about, never fatal.
+  report: true
+  # Also refresh it after every round, so a long run can be inspected in flight.
+  report_each_round: false
+
+target:
+  # Target truncated to the C-type lectin domain A357-494 (138 res). Verified to
+  # contain the entire binder interface (0 contacts outside the range at 4.5/5/8 A
+  # heavy-atom and 8/10 A CA-CA) with all three disulfides intact
+  # (C361-C372, C389-C485, C462-C477). 1867 -> 282 tokens.
+  pdb: /orcd/pool/005/keating_shared/fosterb/min_colab/pdbs/350d_binder12_trunc_0.pdb
+  # MUST match the PDB: the AF3 pipeline builds its input from this FASTA, so a
+  # full-length FASTA would silently re-fold the whole 1867-token target.
+  fasta: /orcd/pool/005/keating_shared/fosterb/min_colab/pdbs/350d_binder12_trunc_0.fasta
+  # Chain A must point at the CROPPED a3m (helper_scripts/crop_a3m.py); chain B
+  # (the binder) is unchanged.
+  msa_json: /orcd/pool/005/keating_shared/fosterb/min_colab/msa_json_paths/350d_binder12_trunc_msa_paths.json
+  binding_energy_json: /orcd/pool/005/keating_shared/fosterb/min_colab/binding_energy_partitions.json
+  # Or state them inline and leave binding_energy_json null:
+  binding_partitions: [["A"], ["B"]]
+
+# Forwarded to mutation_search.recursive_mutation_search.
+search:
+  cfg_path: inputs/example_mut_search_config.yaml
+  # Mutation depth PER ROUND. Rounds compound: with promote_top_n seeds each
+  # carrying the previous round's mutations, max_mutations=2 over 5 rounds
+  # already reaches 10 mutations. Keep this small (1-2) and let the loop
+  # provide the depth -- it is both cheaper and a finer-grained hill climb.
+  # Sequences scored at depth d = (kept at depth d-1) x (mutable positions x 19),
+  # so depth 3-4 is where the cost blows up.
+  max_mutations: 2
+  top_percent: 10.0
+  top_percent_decay_base: 1.0
+  # Whole-round budget under keep_budget_scope=global (divided across seeds), or
+  # a per-seed cap under per_seed (which multiplies cost by the seed count).
+  max_keep_per_depth: 1000
+  keep_budget_scope: global    # global | per_seed
+  per_position_quota: 100
+  disallowed_chains: [A]     # target chain held fixed; only the binder mutates
+  binder_chain: B
+  energy_mode: both
+  rank_by: pareto            # joint | binding | pareto
+  rrf_k: 60
+  binding_energy_cutoff: 8.0
+  allowed_from_aas: null     # e.g. "AVILMFW" to mutate only hydrophobics
+  allowed_to_aas: null       # e.g. "RNDEQHKSTY" for hydrophilic substitutions
+  show_pareto_front: true
+  use_depths: []             # empty = pool every depth
+
+# How the ~1000 kept candidates become the AF3 folding set.
+selection:
+  # PottsMPNN builds a different energy table per structure, so its energies are
+  # NOT comparable between seeds. "per_seed" ranks each seed's candidates only
+  # against its own structure-mates and gives each seed max_candidates/n_seeds
+  # slots; structures are then compared solely on the AF3/PISA metrics, which are
+  # absolute. "pooled" is only valid when a round has one seed.
+  scope: per_seed              # per_seed | pooled
+  # A column, a derived metric (pareto_rank | pareto_front | pareto_distance | rrf),
+  # or an expression such as "binding_score - 0.5 * stability_score".
+  objective: binding_score
+  direction: min
+  # Hard filters, ANDed. This pair is "best binding, but stability must not get worse".
+  constraints:
+    - "stability_score <= 0"
+  max_candidates: 50
+  diversity:
+    enabled: true
+    weight: 10.0
+    metric: jaccard          # jaccard | overlap
+  stability_column: stability_score
+  binding_column: binding_score
+  mutation_column: mutations
+
+structure:
+  pipeline_script: /orcd/pool/005/keating_shared/fosterb/PottsMPNN_dev/run_mutation_af3_pipeline.py
+  pisa_exe: /orcd/pool/005/keating_shared/fosterb/pisa/build/pisa
+  pisa_cfg: /orcd/pool/005/keating_shared/fosterb/pisa/configs/test_cfg.txt
+  ipsae_script: /orcd/pool/005/keating_shared/fosterb/ipsae/ipsae.py
+  # Truncation drops the AF3 bucket from 2048 to ~512 tokens, so pair-memory
+  # falls roughly 16x versus the full-length run that OOMed at max_parallel=16
+  # (a single full-length allocation was 14 GiB). 4 is a safe restart; raise it
+  # while watching for RESOURCE_EXHAUSTED in the stage log.
+  max_parallel: 16
+  # Must match the pipeline's own defaults: the ipSAE report filename embeds
+  # both cutoffs, and we read those reports back to pick each mutant's best
+  # model when re-seeding.
+  pae_cutoff: 10
+  dist_cutoff: 15
+  python_executable: python
+  extra_args: []
+  cache_by_sequence: true
+  timeout_seconds: null
+  # AF3 uses the chain ids from the FASTA header, so this is normally empty.
+  af3_chain_map: {}
+  # Disk control. AF3 writes a PAE/confidence matrix per diffusion sample that is
+  # O(tokens^2): ~1 MB/sample truncated, but ~40 MB/sample at full length -- i.e.
+  # ~6 GB per round, ~30 GB over 5 rounds. It is read once (by ipSAE) and never
+  # again, so it is pruned after each round.
+  # Structures (*_model.cif) and ipSAE reports are NEVER pruned: the RMSD gate and
+  # re-seeding depend on them, so a pruned mutant stays fully usable.
+  cleanup:
+    mode: compress         # none | compress (gzip) | delete
+    keep_winners: true     # leave the round's winners completely untouched
+    # "summary" is the pipeline's completeness marker. It is pruned with the PAE
+    # on purpose -- keeping it while removing the PAE would make a forced rerun
+    # skip inference and then silently yield NaN metrics.
+    targets: [pae, pisa, summary]
+  # How to read the pipeline's results. Pinned to run_mutation_af3_pipeline.py:
+  # it writes "<input_csv_stem>_with_af3.csv" and joins on the mutations column.
+  adapter:
+    results_glob: "{stem}_with_af3.csv"
+    mutation_key_column: mutations
+    metric_columns:
+      ipsae: ipSAE
+      dG_binding: dG_binding
+    extra_columns: [int_area, dG_diss]
+
+gating:
+  metrics:
+    ipsae:
+      direction: max         # interface confidence: higher is better
+      cutoff: 0.70
+    dG_binding:
+      direction: min         # interface solvation energy: more negative is better
+      cutoff: -15.0
+  # A mutant must beat wildtype on ALL of these to be promoted.
+  beats_wt_on: [ipsae, dG_binding]
+  # "any" ends the run when either cutoff is reached; "all" requires both.
+  # To gate on one metric only, set the other metric's cutoff to null.
+  stop_when: any
+  require_n_passing: 1
+  # Each promoted winner becomes an independent search seed in the next round,
+  # so this directly multiplies the round's search fan-out. Under
+  # keep_budget_scope=global the scoring cost stays flat, but wall-clock still
+  # grows because the searches run sequentially.
+  promote_top_n: 10
+  stop_on_no_winners: true
+  promote_by: null           # null = rank winners by selection.objective
+  # Post-AF3 structural sanity check (default on). Rejects a mutant whose AF3
+  # prediction drifts too far from the structure its search reasoned about --
+  # such a mutant's ipSAE/PISA describe a different structure than was scored.
+  # A failing mutant is disqualified from BOTH promotion and the stop-cutoff.
+  rmsd_gate:
+    enabled: true
+    max_rmsd: 2.0            # Angstroms, superposed
+    atoms: CA               # CA | backbone (N,CA,C,O)
+    reference: seed         # seed = the structure the mutant was searched from;
+                            # target = always the original target PDB
+    # WHAT the RMSD is measured over. "interface" superposes on target atoms near
+    # the binder and scores the binder (CAPRI ligand-RMSD, localized to the
+    # pocket) -- it answers "did the binder move or misfold relative to the
+    # binding site?". Do NOT use "complex" on a multi-domain target: it is wrong
+    # in both directions, failing good candidates on domain motion far from the
+    # interface while diluting a real 5 A mis-dock down to ~1 A.
+    scope: interface        # interface | binder | complex
+    interface_cutoff: 10.0  # A; target atoms this close to the binder set the frame
+
+# PISA metric directions -- these are OPPOSITE, and a wrong direction inverts
+# the gate silently rather than erroring:
+#   dG_binding  interface solvation energy (int_solv_en)   better LOW   <- default
+#   dG_diss     dissociation free energy of the assembly   better HIGH
+# To gate on dG_diss instead:
+#   structure.adapter.metric_columns: {ipsae: ipSAE, dG_diss: dG_diss}
+#   gating.metrics.dG_diss: {direction: max, cutoff: 15.0}
+
+slurm:
+  partition: pi_keating
+  gres: gpu:h100:1
+  mem: 180G
+  time: "96:00:00"
+  cpus_per_task: 15
+  conda_env: PottsMPNN
+  conda_root: null           # null = $(conda info --base)
+  modules: [apptainer/1.4.2]
+  account: null
+  extra_directives: []
+  poll_interval_seconds: 60

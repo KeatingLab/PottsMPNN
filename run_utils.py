@@ -835,7 +835,7 @@ def get_etab(model, pdb_data, cfg, partition):
     etab = torch.nn.functional.pad(etab, pad, "constant", 0) # Add padding to account for 'X' and '-' tokens
     return etab, E_idx, wt_seq
 
-def score_seqs(model, cfg, pdb_data, nrgs, seqs, partition=None, track_progress=False):
+def score_seqs(model, cfg, pdb_data, nrgs, seqs, partition=None, track_progress=False, keep_seqs=True):
     """
     Score sequences using the energy table.
 
@@ -855,15 +855,19 @@ def score_seqs(model, cfg, pdb_data, nrgs, seqs, partition=None, track_progress=
         list of chains to analyze
     track_progress : bool (optional, default False)
         Whether to track progress with tqdm
-    
+    keep_seqs : bool (optional, default True)
+        Whether to accumulate and return the per-sequence tensors. Set to False
+        when only the scalar scores are needed, to keep peak memory flat in the
+        number of sequences scored.
+
     Returns
     -------
     scores : torch.Tensor, shape (N,)
         Scores for each sequence.
-    scored_seqs : torch.Tensor, shape (N, L)
-        Scored sequences
-    reference_scores : torch.Tensor, shape (N,)
-        References for scored sequences
+    scored_seqs : torch.Tensor, shape (N, L) or None
+        Scored sequences, or None if keep_seqs is False
+    reference_scores : torch.Tensor, shape (N,) or None
+        References for scored sequences, or None if keep_seqs is False
     """
     etab, E_idx, wt_seq = get_etab(model, pdb_data, cfg, partition)
     
@@ -871,27 +875,42 @@ def score_seqs(model, cfg, pdb_data, nrgs, seqs, partition=None, track_progress=
     if cfg.inference.ddG: # If ddG prediction (default), use wildtype as reference energy
         nrgs = np.insert(nrgs, 0, 0.0)
         seqs = np.insert(seqs, 0, wt_seq)
-    # Transform nrgs and seqs to tensors
-    nrgs = torch.from_numpy(np.array(nrgs)).to(dtype=torch.float32, device=cfg.dev).unsqueeze(0)
-    seqs = torch.stack([etab_utils.seq_to_tensor(seq) for seq in seqs]).to(dtype=torch.int64, device=cfg.dev).unsqueeze(0)
+    # Transform nrgs and seqs to tensors. Keep the full inputs on the host and
+    # move only the current batch to the GPU, so peak device memory scales with
+    # the batch size rather than the total number of sequences.
+    nrgs = torch.from_numpy(np.array(nrgs)).to(dtype=torch.float32).unsqueeze(0)
+    seqs = etab_utils.seqs_to_tensor(seqs, dev='cpu').unsqueeze(0)
 
     if etab.size(1)*nrgs.shape[1] > cfg.inference.max_tokens:
         batch_size = int(cfg.inference.max_tokens / etab.size(1))
     else:
         batch_size = nrgs.shape[1]
-    
+
     # Calculate energies
     scores, scored_seqs, reference_scores = [], [], []
     for batch in tqdm(range(0, nrgs.shape[1], batch_size), disable=not track_progress, desc="Calculating energies"):
-        batch_scores, batch_seqs, batch_refs = etab_utils.calc_eners(etab, E_idx, seqs[:,batch:batch+batch_size], nrgs[:,batch:batch+batch_size], filter=cfg.inference.filter)
+        seqs_batch = seqs[:, batch:batch+batch_size].to(cfg.dev)
+        nrgs_batch = nrgs[:, batch:batch+batch_size].to(cfg.dev)
+        batch_scores, batch_seqs, batch_refs = etab_utils.calc_eners(etab, E_idx, seqs_batch, nrgs_batch, filter=cfg.inference.filter)
         scores.append(batch_scores)
-        scored_seqs.append(batch_seqs)
-        reference_scores.append(batch_refs)
-    scores, scored_seqs, reference_scores = torch.cat(scores, 1), torch.cat(scored_seqs, 1), torch.cat(reference_scores, 1)
+        # scored_seqs/reference_scores are only needed by callers that inspect the
+        # per-sequence outputs (e.g. energy_prediction). When keep_seqs is False we
+        # skip accumulating them, which otherwise holds a full copy of every
+        # sequence on the GPU and defeats the purpose of batching.
+        if keep_seqs:
+            scored_seqs.append(batch_seqs)
+            reference_scores.append(batch_refs)
+    scores = torch.cat(scores, 1)
+    if keep_seqs:
+        scored_seqs, reference_scores = torch.cat(scored_seqs, 1), torch.cat(reference_scores, 1)
+    else:
+        scored_seqs, reference_scores = None, None
 
     if cfg.inference.ddG: # If ddG prediction (default), compare to wildtype and remove reference
         scores = scores -scores[:, 0]
-        scores, scored_seqs, reference_scores = scores[:, 1:], scored_seqs[:, 1:], reference_scores[:, 1:]
+        scores = scores[:, 1:]
+        if keep_seqs:
+            scored_seqs, reference_scores = scored_seqs[:, 1:], reference_scores[:, 1:]
 
     if cfg.inference.mean_norm: # By default, normalize so mean is 0 (helps when comparing proteins with large numbers of mutants)
         scores -= torch.mean(scores, dim=1)

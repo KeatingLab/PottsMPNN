@@ -1,0 +1,34 @@
+# PottsMPNN model config for the mutation search.
+#
+# Referenced by `search.cfg_path` in the optimization config.
+#
+# Only a subset of these keys is read by the mutation search:
+#   dev, model.*, inference.noise, inference.skip_gaps, inference.max_tokens
+# The ddG / mean_norm / filter flags are set programmatically at scoring time
+# (mutation_search.py:395-397), so their values here are placeholders.
+
+dev: cuda
+out_dir: outputs/mutation_search
+out_name: mutation_search
+
+model:
+  check_path: vanilla_model_weights/pottsmpnn_msa_20.pt
+  hidden_dim: 128
+  edge_features: 128
+  potts_dim: 400
+  num_layers: 3
+  num_edges: 48
+  vocab: 22                  # set to 22 automatically when check_path contains "msa"
+
+inference:
+  ddG: true
+  mean_norm: false
+  max_tokens: 20000
+  filter: false
+  binding_energy_json: null  # supplied per-seed by the optimization loop
+  binding_energy_cutoff: 8
+  chain_sequence_overrides: null
+  skip_gaps: false
+  noise: 0.0
+  chain_dict: null
+  chain_ranges: null

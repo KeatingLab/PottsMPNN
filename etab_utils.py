@@ -381,6 +381,41 @@ def seq_to_tensor(sequence, dev='cpu'):
     """
     return torch.tensor(seq_to_ints(sequence), dtype=torch.int64).to(device=dev)
 
+_SEQ_LUT = None
+
+def _get_seq_lut():
+    """Lazily build a 256-entry ASCII -> integer lookup table from AA_to_int."""
+    global _SEQ_LUT
+    if _SEQ_LUT is None:
+        lut = np.full(256, -1, dtype=np.int64)
+        for aa, idx in AA_to_int.items():
+            if len(aa) == 1:
+                lut[ord(aa)] = idx
+        _SEQ_LUT = lut
+    return _SEQ_LUT
+
+def seqs_to_tensor(sequences, dev='cpu'):
+    """
+    Vectorized batch version of seq_to_tensor for equal-length sequences.
+
+    Given an iterable of equal-length one-letter sequences, return an int64
+    tensor of shape (n, L). Equivalent to
+    ``torch.stack([seq_to_tensor(s) for s in sequences])`` but performs the
+    encoding with a single vectorized numpy lookup instead of a per-residue
+    Python dict loop. This keeps host-side tokenization from starving the GPU
+    when scoring tens of thousands of sequences.
+    """
+    sequences = list(sequences)
+    if not sequences:
+        return torch.empty((0, 0), dtype=torch.int64, device=dev)
+    lut = _get_seq_lut()
+    n = len(sequences)
+    buf = np.frombuffer("".join(sequences).encode("ascii"), dtype=np.uint8)
+    ints = lut[buf]
+    if (ints < 0).any():
+        raise ValueError("Encountered residue not present in AA_to_int mapping.")
+    return torch.from_numpy(ints.reshape(n, -1)).to(device=dev)
+
 def ints_to_seq(int_list):
     return [int_to_AA[i] if i in int_to_AA.keys() else 'X' for i in int_list]
 

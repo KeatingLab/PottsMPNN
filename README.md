@@ -213,3 +213,13 @@ and design. Nature 620, 434–444 (2023). [https://doi.org/10.1038/s41586-023-06
 Acids Res. 49, D319–D324 (2021). [https://doi.org/10.1093/nar/gkaa981](https://doi.org/10.1093/nar/gkaa981)
 * SARS-CoV-2: TN Starr, et al., Deep Mutational Scanning of SARS-CoV-2 Receptor Binding Domain Reveals
 Constraints on Folding and ACE2 Binding. Cell 182, 1295–1310.e20 (2020). [https://doi.org/10.1016/j.cell.2020.08.012](https://doi.org/10.1016/j.cell.2020.08.012)
+
+---
+
+## 7. Iterative Binder Optimization (AF3 + PISA)
+
+`run_optimization.py` runs a closed optimization loop: a PottsMPNN mutation search over a Pareto front of stability × binding, structural validation of the top mutants with AlphaFold3 + ipSAE + PISA, promotion of those that beat wildtype, and re-seeding of the next round from their predicted structures — for a configurable number of iterations or until an ipSAE/PISA cutoff is met.
+
+This stage requires **AlphaFold3, ipSAE, and PISA to be installed separately**.
+
+See **[ITERATIVE_OPTIMIZATION.md](ITERATIVE_OPTIMIZATION.md)** for the full tutorial, installation links, and the complete configuration reference. Developer-facing notes on the package internals are in [`optimize/README.md`](optimize/README.md).

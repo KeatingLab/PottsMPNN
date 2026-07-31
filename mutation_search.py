@@ -29,7 +29,8 @@ from matplotlib.ticker import MaxNLocator
 from omegaconf import OmegaConf
 import argparse
 
-from potts_mpnn_utils import PottsMPNN, parse_PDB
+from data_utils import parse_PDB
+from potts_mpnn_utils import PottsMPNN
 from run_utils import chain_to_partition_map, inter_partition_contact_mask, score_seqs
 
 AMINO_ACIDS = list("ACDEFGHIKLMNPQRSTVWY")
@@ -353,17 +354,17 @@ def _score_seqs_batched(
     partition: Optional[Sequence[str]] = None,
     track_progress: bool = False,
     max_batch_size: int = MAX_SEQS_PER_BATCH,
-) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[torch.Tensor]]:
     if not sequences:
         empty = torch.empty((1, 0), device=cfg.dev)
-        return empty, empty, empty
+        return empty, None, None
 
     scores_list = []
-    seqs_list = []
-    refs_list = []
     for idx in range(0, len(sequences), max_batch_size):
         batch = sequences[idx : idx + max_batch_size]
-        batch_scores, batch_seqs, batch_refs = score_seqs(
+        # The mutation search only consumes the scalar scores; skip retaining the
+        # per-sequence tensors so GPU memory does not grow with the candidate count.
+        batch_scores, _, _ = score_seqs(
             model,
             cfg,
             pdb_data,
@@ -371,15 +372,12 @@ def _score_seqs_batched(
             list(batch),
             partition=partition,
             track_progress=track_progress,
+            keep_seqs=False,
         )
         scores_list.append(batch_scores)
-        seqs_list.append(batch_seqs)
-        refs_list.append(batch_refs)
 
     scores = torch.cat(scores_list, dim=1)
-    scored_seqs = torch.cat(seqs_list, dim=1)
-    reference_scores = torch.cat(refs_list, dim=1)
-    return scores, scored_seqs, reference_scores
+    return scores, None, None
 
 
 def _score_sequences(
@@ -391,6 +389,8 @@ def _score_sequences(
     energy_mode: str,
     binding_energy_cutoff: Optional[float] = None,
     rrf_k: int = 60,
+    binder_chain: Optional[str] = None,
+    rank_by: str = "joint",
 ) -> Tuple[np.ndarray, Optional[np.ndarray], Optional[np.ndarray]]:
     cfg.inference.ddG = True
     cfg.inference.mean_norm = False
@@ -406,12 +406,19 @@ def _score_sequences(
         chain_order = pdb_entry["chain_order"]
         chain_lengths = _chain_lengths(pdb_entry)
         wt_sequence = pdb_entry["seq"]
-        scores, _, _ = _score_seqs_batched(
-            model, cfg, pdb_data, sequences, track_progress=True
-        )
-        scores = scores.squeeze(0)
+        # With binder_chain set, stability is taken from that chain's isolated
+        # (unbound) partition energy inside the partition loop below, rather than
+        # from the whole complex. That substitution only happens when binding
+        # partitions are scored, so fall back to the complex for energy_mode
+        # "stability", which never enters that loop.
+        stability_scores = None
+        if binder_chain is None or energy_mode == "stability":
+            scores, _, _ = _score_seqs_batched(
+                model, cfg, pdb_data, sequences, track_progress=True
+            )
+            scores = scores.squeeze(0)
+            stability_scores = scores.cpu().numpy()
 
-        stability_scores = scores.cpu().numpy()
         if energy_mode == "stability":
             all_scores.append(stability_scores)
             all_stability.append(stability_scores)
@@ -432,7 +439,7 @@ def _score_sequences(
         else:
             binding_sequences = list(sequences)
 
-        bound_scores = torch.zeros_like(scores)
+        bound_scores = torch.zeros(len(sequences), dtype=torch.float32, device=cfg.dev)
         bound_indices = [idx for idx, seq in enumerate(binding_sequences) if seq != wt_sequence]
         if bound_indices:
             bound_subset = [binding_sequences[idx] for idx in bound_indices]
@@ -445,7 +452,7 @@ def _score_sequences(
             )
             bound_scores[bound_indices] = bound_subset_scores.squeeze(0)
 
-        unbound_scores = torch.zeros_like(scores)
+        unbound_scores = torch.zeros(len(sequences), dtype=torch.float32, device=cfg.dev)
         for partition in binding_partitions:
             wt_partition_seq = _partition_sequence(
                 wt_sequence, chain_order, chain_lengths, partition
@@ -473,16 +480,47 @@ def _score_sequences(
                 unbound_scores[partition_indices] + partition_scores.squeeze(0)
             )
 
+            if binder_chain is not None and binder_chain in partition:
+                # partition_scores covers only partition_indices; scatter back to
+                # full length so stability aligns with binding_scores_np. The
+                # rest are unmutated within this partition, so their ddG is 0 --
+                # the same convention unbound_scores uses.
+                binder_stability = np.zeros(len(sequences), dtype=np.float32)
+                binder_stability[partition_indices] = (
+                    partition_scores.squeeze(0).cpu().numpy()
+                )
+                stability_scores = binder_stability
+
+        if stability_scores is None:
+            raise ValueError(
+                f"binder_chain {binder_chain!r} is not present in any binding "
+                "partition, so no stability score could be computed. Check that "
+                "it matches a chain in the binding_energy_json partitions."
+            )
+
         binding_scores = bound_scores - unbound_scores
         binding_scores_np = binding_scores.cpu().numpy()
         if energy_mode == "binding":
             all_scores.append(binding_scores_np)
             all_binding.append(binding_scores_np)
         elif energy_mode == "both":
-            stability_ranks = _rank_scores(stability_scores)
-            binding_ranks = _rank_scores(binding_scores_np)
-            rrf_scores = _rrf_scores(stability_ranks, binding_ranks, rrf_k)
-            all_scores.append(-rrf_scores)
+            if rank_by == "binding":
+                # Rank purely by binding score (lower is better); stability is
+                # still computed and tracked, but does not affect the ordering.
+                all_scores.append(binding_scores_np)
+            elif rank_by == "pareto":
+                # Rank by Pareto front index (non-dominated sorting over
+                # stability + binding, both minimized). Ties within a front are
+                # broken by binding score so the keep_n cutoff prefers low
+                # binding. Lower composite = better.
+                front_ranks = _pareto_rank(stability_scores, binding_scores_np).astype(float)
+                binding_tiebreak = _rank_scores(binding_scores_np).astype(float)
+                all_scores.append(front_ranks + binding_tiebreak / (len(binding_tiebreak) + 1.0))
+            else:
+                stability_ranks = _rank_scores(stability_scores)
+                binding_ranks = _rank_scores(binding_scores_np)
+                rrf_scores = _rrf_scores(stability_ranks, binding_ranks, rrf_k)
+                all_scores.append(-rrf_scores)
             all_stability.append(stability_scores)
             all_binding.append(binding_scores_np)
         else:
@@ -509,25 +547,122 @@ def _rrf_scores(stability_ranks: np.ndarray, binding_ranks: np.ndarray, rrf_k: i
 
 
 def _pareto_front(stability_scores: np.ndarray, binding_scores: np.ndarray) -> np.ndarray:
+    """Return a boolean mask marking the Pareto-optimal points (both minimized).
+
+    A point ``i`` is on the front unless some other point ``j`` weakly dominates
+    it: ``stability[j] <= stability[i]`` and ``binding[j] <= binding[i]`` with a
+    strict inequality in at least one objective. Points with identical
+    coordinates do not dominate one another, so duplicate optima are all kept.
+
+    This is an O(n log n) skyline sweep that is exactly equivalent to the naive
+    O(n^2) pairwise check: a point is dominated iff (a) some point of strictly
+    smaller stability has binding <= its binding, or (b) some point of equal
+    stability has strictly smaller binding (i.e. its binding exceeds the minimum
+    binding within its own stability group).
+    """
     n = len(stability_scores)
-    front = np.ones(n, dtype=bool)
-    for i in range(n):
-        if not front[i]:
-            continue
-        for j in range(n):
-            if i == j or not front[i]:
-                continue
-            if (
-                stability_scores[j] <= stability_scores[i]
-                and binding_scores[j] <= binding_scores[i]
-                and (
-                    stability_scores[j] < stability_scores[i]
-                    or binding_scores[j] < binding_scores[i]
-                )
-            ):
-                front[i] = False
-                break
+    front = np.zeros(n, dtype=bool)
+    if n == 0:
+        return front
+    stab = np.asarray(stability_scores, dtype=float)
+    bind = np.asarray(binding_scores, dtype=float)
+
+    # Sort by stability ascending, binding ascending as the tiebreak.
+    order = np.lexsort((bind, stab))
+    s = stab[order]
+    b = bind[order]
+
+    # Identify contiguous groups of equal stability in the sorted order.
+    new_group = np.empty(n, dtype=bool)
+    new_group[0] = True
+    new_group[1:] = s[1:] != s[:-1]
+    gid = np.cumsum(new_group) - 1
+    group_start = np.flatnonzero(new_group)
+    # Binding is sorted ascending within each group, so the group's first entry
+    # is its minimum binding.
+    group_min = b[group_start]
+
+    # Minimum binding among all points of strictly smaller stability, per group.
+    prev_min = np.empty(group_min.shape[0], dtype=float)
+    prev_min[0] = np.inf
+    if group_min.shape[0] > 1:
+        prev_min[1:] = np.minimum.accumulate(group_min[:-1])
+
+    gm = group_min[gid]  # min binding within own stability group
+    pm = prev_min[gid]   # min binding among strictly smaller stability
+    on_front_sorted = (b == gm) & (pm > b)
+
+    front[order] = on_front_sorted
     return front
+
+
+def _pareto_rank(stability_scores: np.ndarray, binding_scores: np.ndarray) -> np.ndarray:
+    """Assign each point a Pareto front index (0 = non-dominated, higher = worse).
+
+    Both objectives are minimized (lower stability and lower binding are better),
+    matching :func:`_pareto_front`. The front index equals the result of
+    fast non-dominated sorting (NSGA-II): front 0 is the non-dominated set,
+    front 1 is non-dominated once front 0 is removed, and so on.
+
+    Implementation is O(n log n): a point's front index is one more than the
+    largest front index among the points that dominate it (or 0 if none). The
+    dominators of a point all precede it when points are processed in
+    (stability, binding) ascending order, so the recurrence can be evaluated in
+    that order while a Fenwick tree keeps the running maximum front index over
+    every binding value <= the current one. Points that share identical
+    (stability, binding) coordinates do not dominate one another, so they are
+    processed as a group (queried before any of them is inserted) and receive
+    the same front index -- exactly as in the naive NSGA-II peeling.
+    """
+    n = len(stability_scores)
+    if n == 0:
+        return np.empty(0, dtype=int)
+    stab = np.asarray(stability_scores, dtype=float)
+    bind = np.asarray(binding_scores, dtype=float)
+
+    # (stability asc, binding asc) is a topological order for domination.
+    order = np.lexsort((bind, stab))
+    s = stab[order]
+    b = bind[order]
+
+    # Compress binding to 1-indexed ranks for the Fenwick tree.
+    bind_ranks = (np.searchsorted(np.unique(b), b) + 1).astype(np.int64)
+    m = int(bind_ranks.max())  # number of distinct binding values (max 1-indexed rank)
+
+    # Contiguous groups of identical (stability, binding) coordinates.
+    new_group = np.empty(n, dtype=bool)
+    new_group[0] = True
+    new_group[1:] = (s[1:] != s[:-1]) | (b[1:] != b[:-1])
+    group_start = np.flatnonzero(new_group)
+    group_end = np.append(group_start[1:], n)
+    group_rank = bind_ranks[group_start]
+
+    NEG = -1  # sentinel: an empty prefix-max query yields front 0 after +1
+    tree = [NEG] * (m + 1)  # Fenwick tree (1-indexed) holding a prefix maximum
+
+    front_sorted = np.empty(n, dtype=int)
+    for gs, ge, br in zip(group_start.tolist(), group_end.tolist(), group_rank.tolist()):
+        # Query max front index among dominators: earlier groups with binding
+        # rank <= br (all such groups have stability <= and thus dominate).
+        idx = br
+        best = NEG
+        while idx > 0:
+            v = tree[idx]
+            if v > best:
+                best = v
+            idx -= idx & (-idx)
+        f = best + 1
+        front_sorted[gs:ge] = f
+        # Insert this group's front index at its binding rank (point max-update).
+        idx = br
+        while idx <= m:
+            if f > tree[idx]:
+                tree[idx] = f
+            idx += idx & (-idx)
+
+    front_index = np.empty(n, dtype=int)
+    front_index[order] = front_sorted
+    return front_index
 
 
 def _normalize_amino_acids(amino_acids: Optional[Iterable[str]]) -> Optional[List[str]]:
@@ -551,6 +686,7 @@ def recursive_mutation_search(
     binding_energy_cutoff: Optional[float] = None,
     energy_mode: str = "stability",
     rrf_k: int = 60,
+    rank_by: str = "joint",
     show_pareto_front: bool = False,
     plot_dir: Optional[str] = None,
     top_percent_decay_base: float = 10.0,
@@ -558,6 +694,7 @@ def recursive_mutation_search(
     per_position_quota: Optional[int] = None,
     allowed_from_aas: Optional[Iterable[str]] = None,
     allowed_to_aas: Optional[Iterable[str]] = None,
+    binder_chain: Optional[str] = None,
 ) -> Dict[int, pd.DataFrame]:
     """Search mutations iteratively and return the top percent at each depth.
 
@@ -592,6 +729,14 @@ def recursive_mutation_search(
         "stability", "binding", or "both". "both" is stability + binding.
     rrf_k : int
         Reciprocal rank fusion constant used when energy_mode is "both".
+    rank_by : str
+        How to rank candidates for selection when energy_mode is "both".
+        "joint" (default) uses reciprocal rank fusion of stability and binding.
+        "binding" ranks by binding score only (lower is better); stability is
+        still computed and reported, but does not influence which mutations are
+        carried to the next depth. "pareto" ranks by Pareto front index from
+        non-dominated sorting over (stability, binding), breaking ties within a
+        front by binding score.
     show_pareto_front : bool
         If True and energy_mode is "both", include a Pareto front indicator column.
     plot_dir : str, optional
@@ -616,6 +761,13 @@ def recursive_mutation_search(
         raise ValueError("binding_energy_cutoff must be a positive distance in Angstroms.")
     if rrf_k <= 0:
         raise ValueError("rrf_k must be a positive integer.")
+    if rank_by not in {"joint", "binding", "pareto"}:
+        raise ValueError("rank_by must be one of: 'joint', 'binding', 'pareto'.")
+    if rank_by in {"binding", "pareto"} and energy_mode != "both":
+        raise ValueError(
+            f"rank_by='{rank_by}' requires energy_mode='both' so that stability is "
+            "still computed and tracked."
+        )
     if show_pareto_front and energy_mode != "both":
         raise ValueError("show_pareto_front requires energy_mode='both'.")
     if top_percent_decay_base <= 0:
@@ -705,6 +857,8 @@ def recursive_mutation_search(
             energy_mode,
             binding_energy_cutoff=binding_energy_cutoff,
             rrf_k=rrf_k,
+            binder_chain=binder_chain,
+            rank_by=rank_by,
         )
         for seq, score in zip(sequences, scores):
             generated[seq].score = float(score)
@@ -769,26 +923,36 @@ def main():
     parser.add_argument("--top_percent", type=float, default=10.0, help="Top percentage to keep")
     parser.add_argument("--top_percent_decay_base", type=float, default=1.0, help="Decay base for top_percent")
     parser.add_argument("--max_keep_per_depth", type=int, default=2000, help="Hard cap on kept candidates")
-    parser.add_argument("--per_position_quota", type=int, default=None, help="Max candidates per position")
+    parser.add_argument("--per_position_quota", type=int, default=200, help="Max candidates per position")
     
     # Constraints
     parser.add_argument("--disallowed_chains", nargs="+", default=[], help="Chains to exclude from mutation")
     parser.add_argument("--allowed_from_aas", type=str, default=None, help="String of allowed source AAs")
     parser.add_argument("--allowed_to_aas", type=str, default=None, help="String of allowed target AAs")
+    parser.add_argument("--binder_chain", type=str, default=None, help="Chain to calculate stabilities for")
 
     # Energy/Scoring parameters
     parser.add_argument("--binding_energy_json", type=str, default=None, help="Path to binding energy JSON")
     parser.add_argument("--binding_energy_cutoff", type=float, default=None, help="Contact cutoff in Angstroms")
     parser.add_argument("--energy_mode", type=str, default="both", choices=["stability", "binding", "both"], help="Scoring mode")
     parser.add_argument("--rrf_k", type=int, default=60, help="RRF constant for 'both' mode")
+    parser.add_argument(
+        "--rank_by",
+        type=str,
+        default="joint",
+        choices=["joint", "binding", "pareto"],
+        help="In 'both' mode, rank kept mutations by joint RRF score (default), "
+             "by binding score only, or by Pareto dominance over (stability, "
+             "binding); stability is always tracked",
+    )
     parser.add_argument("--no_pareto_front", action="store_true", help="Disable Pareto front calculation")
-
+    parser.add_argument("--pareto_prefilter_percentile", type=float, default=None, help="Optional percentile prefilter for Pareto computation (0,100].")
     args = parser.parse_args()
 
     # Convert amino acid strings to lists if provided
     allowed_from = list(args.allowed_from_aas) if args.allowed_from_aas else None
     allowed_to = list(args.allowed_to_aas) if args.allowed_to_aas else None
-
+    args.disallowed_chains = ['A']
     # Run the search
     print(f"Starting search for {len(args.pdb_paths)} PDBs...")
     results = recursive_mutation_search(
@@ -796,12 +960,13 @@ def main():
         cfg_path=args.cfg_path,
         max_mutations=args.max_mutations,
         top_percent=args.top_percent,
-        allowed_mutations=None, # Complex dict not supported via CLI, modify script if needed
+        allowed_mutations=None,
         disallowed_chains=args.disallowed_chains,
         binding_energy_json=args.binding_energy_json,
         binding_energy_cutoff=args.binding_energy_cutoff,
         energy_mode=args.energy_mode,
         rrf_k=args.rrf_k,
+        rank_by=args.rank_by,
         show_pareto_front=not args.no_pareto_front,
         plot_dir=args.plot_dir,
         top_percent_decay_base=args.top_percent_decay_base,
@@ -809,6 +974,7 @@ def main():
         per_position_quota=args.per_position_quota,
         allowed_from_aas=allowed_from,
         allowed_to_aas=allowed_to,
+        binder_chain=args.binder_chain
     )
 
     # Save results to CSV

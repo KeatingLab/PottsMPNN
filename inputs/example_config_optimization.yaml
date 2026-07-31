@@ -6,11 +6,8 @@
 # promote mutants beating wildtype -> re-seed. Stops on cutoff or max_iterations.
 
 run:
-  # Fresh directory: the truncated target is a DIFFERENT structure, so its Potts
-  # energies are not comparable to the full-length run, and its AF3 job names
-  # would otherwise collide with cached full-length results.
-  out_dir: outputs/350d_binder12_trunc_optimization
-  out_name: 350d_binder12_trunc_opt
+  out_dir: outputs/example_output_dir
+  out_name: example_name
   max_iterations: 5
   executor: local            # local | slurm
   backbone_source: af3       # af3 = search the predicted structure of each seed
@@ -25,18 +22,10 @@ run:
   report_each_round: false
 
 target:
-  # Target truncated to the C-type lectin domain A357-494 (138 res). Verified to
-  # contain the entire binder interface (0 contacts outside the range at 4.5/5/8 A
-  # heavy-atom and 8/10 A CA-CA) with all three disulfides intact
-  # (C361-C372, C389-C485, C462-C477). 1867 -> 282 tokens.
-  pdb: /orcd/pool/005/keating_shared/fosterb/min_colab/pdbs/350d_binder12_trunc_0.pdb
-  # MUST match the PDB: the AF3 pipeline builds its input from this FASTA, so a
-  # full-length FASTA would silently re-fold the whole 1867-token target.
-  fasta: /orcd/pool/005/keating_shared/fosterb/min_colab/pdbs/350d_binder12_trunc_0.fasta
-  # Chain A must point at the CROPPED a3m (helper_scripts/crop_a3m.py); chain B
-  # (the binder) is unchanged.
-  msa_json: /orcd/pool/005/keating_shared/fosterb/min_colab/msa_json_paths/350d_binder12_trunc_msa_paths.json
-  binding_energy_json: /orcd/pool/005/keating_shared/fosterb/min_colab/binding_energy_partitions.json
+  pdb: /path/to/pdb.pdb
+  fasta: /path/to/fasta.fasta
+  msa_json: /path/to/msa.json
+  binding_energy_json: /path/to/binding_energy.json
   # Or state them inline and leave binding_energy_json null:
   binding_partitions: [["A"], ["B"]]
 
@@ -97,10 +86,6 @@ structure:
   pisa_exe: /orcd/pool/005/keating_shared/fosterb/pisa/build/pisa
   pisa_cfg: /orcd/pool/005/keating_shared/fosterb/pisa/configs/test_cfg.txt
   ipsae_script: /orcd/pool/005/keating_shared/fosterb/ipsae/ipsae.py
-  # Truncation drops the AF3 bucket from 2048 to ~512 tokens, so pair-memory
-  # falls roughly 16x versus the full-length run that OOMed at max_parallel=16
-  # (a single full-length allocation was 14 GiB). 4 is a safe restart; raise it
-  # while watching for RESOURCE_EXHAUSTED in the stage log.
   max_parallel: 16
   # Must match the pipeline's own defaults: the ipSAE report filename embeds
   # both cutoffs, and we read those reports back to pick each mutant's best

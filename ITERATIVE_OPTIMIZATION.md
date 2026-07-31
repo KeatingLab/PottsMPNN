@@ -55,13 +55,7 @@ installation docs to obtain them.
 
 `run_mutation_af3_pipeline.py` invokes AF3 through **Singularity/Apptainer**, not
 Docker, so you need an `alphafold3.sif` image built from the official container.
-It auto-discovers the installation from these locations (edit `find_af3_paths()`
-if yours differs):
-
-```
-/orcd/pool/005/keating_shared/alphafold3/{alphafold3.sif,alphafold3_data,alphafold3_weights,alphafold3}
-/mnt/shared/shared_data/alphafold/{alphafold3.sif,alphafold3_data,alphafold3_weights,alphafold3}
-```
+It auto-discovers the installation from these locations. Edit `find_af3_paths()` with your paths.
 
 It runs with `--num_diffusion_samples=3` and one model seed, and disables JAX
 memory preallocation so several AF3 processes can share one GPU.
@@ -87,15 +81,14 @@ template — the pipeline copies the template per mutant and rewrites
 
 Four inputs beyond the model checkpoint:
 
-**1. Target structure** (`target.pdb`) — the starting complex, e.g.
-`350d_binder7_0.pdb`.
+**1. Target structure** (`target.pdb`) — the starting complex
 
 **2. Target FASTA** (`target.fasta`) — chain ids in the header, sequences joined
 by `:`. The base name (first `|` field) also determines AF3 job directory names:
 
 ```
->350d_binder7|A:B
-MKQLEDKVEELLSKNYHLENEV:ARLKKLVGERGSGSAWSHPQFEK
+>example_binder|A:B
+LPMMPRQVYCA:EEKEFRLDQ
 ```
 
 **3. MSA paths JSON** (`target.msa_json`) — per-chain precomputed MSAs, so AF3
@@ -121,7 +114,7 @@ JSON keyed by PDB name (`target.binding_energy_json`), matching the format used
 elsewhere in PottsMPNN:
 
 ```json
-{"350d_binder7_0": [["A"], ["B"]]}
+{"example_binder": [["A"], ["B"]]}
 ```
 
 ---
@@ -351,15 +344,14 @@ misfold?", and the answer depends entirely on what you superpose:
 | `complex` | everything | everything | global conformation |
 
 > **Do not use `complex` with a multi-domain target.** It is wrong in *both*
-> directions. On a real 1867-residue complex: rotating a domain far from the
+> directions. On a real complex: rotating a domain far from the
 > binding site — leaving the binder untouched — reads **4.37 Å** and fails the
 > gate, while genuinely displacing the binder by 5 Å is diluted to **1.21 Å** and
 > passes it. The `interface` scope reports 0.00 Å and 5.00 Å respectively.
 
 **Sizing `max_parallel`.** This is the most common cause of a failed run. AF3
-pads the input to a token bucket and allocates accordingly: a 1867-residue
-complex rounds to 2048 tokens and requests **~14 GiB in a single allocation**, so
-an 80 GB H100 fits only one or two such runs. Set it by complex size, not by CPU
+pads the input to a token bucket and allocates accordingly: a 2000-residue
+complex rounds to 2048 tokens and requests **~14 GiB in a single allocation**. Set it by complex size, not by CPU
 count:
 
 | Complex size | `max_parallel` on an 80 GB card |
@@ -470,7 +462,7 @@ Each round logs its budget and a ceiling before spending GPU time:
   run_state.json                 resume markers, seed lineage, result cache
   optimization_summary.json      termination reason + per-round statistics
   structure/                     ONE shared AF3 root for the whole run
-    <name>__<TOKENS>/            AF3 job dir, e.g. 350d_binder7__BW102E_BI110S
+    <name>__<TOKENS>/            AF3 job dir, e.g. example_binder__BR1E_V2A
       seed-1_sample-N/           model .cif + ipSAE report per sample
     round_<k>_folding_set_with_af3.csv
   round_<k>/
@@ -483,7 +475,7 @@ Each round logs its budget and a ceiling before spending GPU time:
     round_summary.csv            + beats_wt / meets_cutoff / rmsd / passes_rmsd
 ```
 
-Mutations are reported as `CHAIN:WT<pos><MUT>` (e.g. `B:W102E`), 1-indexed within
+Mutations are reported as `CHAIN:WT<pos><MUT>` (e.g. `B:W3E`), 1-indexed within
 the chain, and always **relative to the original wildtype** — the AF3 pipeline
 validates each mutation against the base FASTA, so cumulative notation is
 required. Reverting a mutation makes it disappear from the list.
@@ -561,7 +553,7 @@ members listed first. Metric names *and directions* are discovered from the data
 Regenerate at any time, including for a run that predates this feature:
 
 ```bash
-python -m optimize.report outputs/350d_binder12_trunc_optimization --top 30
+python -m optimize.report outputs/example_output --top 30
 ```
 
 Set `report_each_round: true` to refresh it after every round and watch a long

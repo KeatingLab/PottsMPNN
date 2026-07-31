@@ -213,3 +213,11 @@ and design. Nature 620, 434–444 (2023). [https://doi.org/10.1038/s41586-023-06
 Acids Res. 49, D319–D324 (2021). [https://doi.org/10.1093/nar/gkaa981](https://doi.org/10.1093/nar/gkaa981)
 * SARS-CoV-2: TN Starr, et al., Deep Mutational Scanning of SARS-CoV-2 Receptor Binding Domain Reveals
 Constraints on Folding and ACE2 Binding. Cell 182, 1295–1310.e20 (2020). [https://doi.org/10.1016/j.cell.2020.08.012](https://doi.org/10.1016/j.cell.2020.08.012)
+
+## 7. MSA training data
+
+The MSAs used to train PottsMPNN are available here: [https://huggingface.co/datasets/FosterBirnbaum/PottsMPNN_Training_MSAs](https://huggingface.co/datasets/FosterBirnbaum/PottsMPNN_Training_MSAs).
+
+## 8. Note on TM-score calculations in the paper
+
+For multichain structures in the benchmark datasets in the paper, the TM-score reported is the average per-chain TM-score between the predicted and native structures.

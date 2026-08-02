@@ -125,7 +125,7 @@ def test_chain_order_matches_parse_pdb_alphabet():
 
 
 def _notebook_rerank(df, binding_col, diversity_weight, metric, mut_col="mutations"):
-    """Literal transcription of mutation_search.ipynb cells 4/9, as the oracle."""
+    """Naive O(n^2) MMR, used as the oracle for the vectorized implementation."""
     if diversity_weight <= 0:
         out = df.sort_values(binding_col, ascending=True).reset_index(drop=True)
         out["uniqueness_score"] = np.nan
@@ -176,7 +176,7 @@ def _random_candidates(n, seed):
 
 
 def test_diversity_rerank_matches_notebook():
-    """The vectorized MMR must reproduce the notebook's selection exactly."""
+    """The vectorized MMR must reproduce the naive selection exactly."""
     for n in (40, 90):
         for weight in (0.0, 1.0, 10.0):
             for metric in ("jaccard", "overlap"):
@@ -194,7 +194,7 @@ def test_diversity_rerank_matches_notebook():
 
 
 def test_max_candidates_is_prefix_of_full_ranking():
-    """The notebook defined top_n but never applied it; here it must truncate."""
+    """max_candidates must truncate the full ranking, not change its order."""
     df = _random_candidates(120, seed=7)
     full = selection.diversity_rerank(df, "binding_score", 10.0, "jaccard", max_candidates=None)
     cut = selection.diversity_rerank(df, "binding_score", 10.0, "jaccard", max_candidates=15)
@@ -1443,7 +1443,7 @@ def test_cleanup_mode_none_is_inert():
 
 
 def test_af3_job_name_matches_pipeline():
-    """Reproduces run_mutation_af3_pipeline.py's job naming (lines 66, 410, 463)."""
+    """Reproduces run_mutation_af3_pipeline.py's job naming."""
     from optimize import af3_layout
 
     assert af3_layout.mutation_af3_tokens("B:W102E,B:I110S") == ["BW102E", "BI110S"]
@@ -1470,7 +1470,7 @@ def test_mutation_order_is_preserved_for_job_names():
 
 
 def test_promotion_preserves_mutation_order():
-    """Regression: promoted seeds must keep the order their model was named with."""
+    """Promoted seeds must keep the order their model was named with."""
     cfg = _gating_cfg()
     df = pd.DataFrame({
         "sequence": ["s1"],

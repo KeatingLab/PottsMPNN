@@ -13,11 +13,6 @@ Together these express requests like *"rank by best binding, but the mutant
 cannot lose stability"*: ``objective: binding_score`` with
 ``constraints: ["stability_score <= 0"]``.
 
-The MMR routine is ported from ``mutation_search.ipynb`` cells 4/9, which
-computed it but only ``display()``-ed the result. Writing it here finally makes
-``ranked_mutations_depth_N.csv`` -- the file the AF3 stage has always consumed
--- a reproducible artifact rather than a manual notebook step.
-
 Pareto helpers are imported from ``mutation_search`` rather than reimplemented;
 the import is function-local because that module pulls in torch.
 """
@@ -41,8 +36,7 @@ DERIVED_OBJECTIVES = ("pareto_rank", "pareto_front", "pareto_distance", "rrf")
 def token_similarity(a_tokens: Sequence[str], b_tokens: Sequence[str], metric: str = "jaccard") -> float:
     """Set similarity between two mutation-token collections.
 
-    Ported verbatim from ``mutation_search.ipynb`` so behaviour matches the
-    notebook exactly, including the empty-set conventions.
+    Two empty sets count as identical; one empty set as maximally dissimilar.
     """
     a, b = set(a_tokens), set(b_tokens)
     if not a and not b:
@@ -103,13 +97,8 @@ def diversity_rerank(
     """Greedy MMR re-rank: lower objective is better, higher uniqueness is better.
 
     Selects ``argmin(objective_norm - weight * uniqueness)`` where
-    ``uniqueness = 1 - max(similarity to already-selected)``, exactly as the
-    notebook did, but vectorized (O(n*k) rather than O(n^2) pandas ``.loc``
-    lookups) and honouring ``max_candidates``.
-
-    The notebook defined ``top_n`` but never applied it, so it always ranked the
-    entire pool; stopping at ``max_candidates`` is both the fix and the reason
-    this is affordable on a 1000-row pool.
+    ``uniqueness = 1 - max(similarity to already-selected)``. Stopping at
+    ``max_candidates`` keeps this O(n*k) and affordable on a 1000-row pool.
     """
     if df.empty:
         out = df.copy()
@@ -349,15 +338,11 @@ def _select_with_cfg(df: pd.DataFrame, cfg, max_candidates: int) -> pd.DataFrame
 def select_from_config(df: pd.DataFrame, cfg) -> pd.DataFrame:
     """Build the AF3 folding set, ranking within each structure separately.
 
-    PottsMPNN produces a different energy table per structure, so ``stability_score``
-    and ``binding_score`` are only meaningful *within* one seed's search. Ranking a
-    pooled frame would let a seed whose structure happens to yield systematically
-    lower energies crowd out every other structure's candidates -- and would compute
-    the Pareto front across incomparable numbers.
-
-    So each seed is ranked against its own structure-mates only, receives a share
-    of ``max_candidates``, and the per-seed picks are unioned. Comparison *between*
-    structures happens later, on the AF3/PISA metrics, which are absolute.
+    PottsMPNN produces a different energy table per structure, so
+    ``stability_score`` and ``binding_score`` are only meaningful *within* one
+    seed's search. Each seed is therefore ranked against its own structure-mates,
+    receives a share of ``max_candidates``, and the picks are unioned. Comparison
+    *between* structures happens later, on the absolute AF3/PISA metrics.
     """
     sel = cfg.selection
     grouped = (

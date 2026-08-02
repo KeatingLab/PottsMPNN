@@ -9,7 +9,7 @@ The loop reads back only two things after a fold:
 * ``*_model.cif``            -- the RMSD gate, and re-seeding the next round
 * ``*_model_<pae>_<dist>.txt`` -- the ipSAE report, to pick each mutant's best sample
 
-Everything else is consumed once, at fold time, by ipSAE and PISA. So the big
+Everything else is consumed once, at fold time, by ipSAE and PISA, so the big
 files can be compressed or removed without touching what the loop depends on.
 
 Two rules make this safe:
@@ -17,12 +17,11 @@ Two rules make this safe:
 1. **Structures and ipSAE reports are never touched.** A pruned mutant can still
    be RMSD-checked and still be promoted.
 2. **``*_summary_confidences.json`` is pruned along with the PAE.** The pipeline
-   uses it as its "outputs are complete" marker (run_mutation_af3_pipeline.py:232).
-   Leaving it while removing the PAE would make the pipeline skip inference and
-   then fail to find the PAE -- silently producing NaN metrics. Removing both
-   keeps the job honestly marked incomplete, so a forced rerun regenerates it.
-   Normal resumes never reach that path, because the loop's own sequence cache
-   serves the metrics.
+   uses it as its "outputs are complete" marker; leaving it while removing the
+   PAE would make the pipeline skip inference and then fail to find the PAE,
+   silently producing NaN metrics. Removing both keeps the job marked incomplete
+   so a forced rerun regenerates it. Normal resumes never reach that path
+   because the loop's own sequence cache serves the metrics.
 """
 
 from __future__ import annotations
@@ -105,9 +104,8 @@ def prune_jobs(
 ) -> CleanupStats:
     """Prune AF3 byproducts under ``structure_dir``.
 
-    ``protected_jobs`` are lowercase AF3 job-directory names left completely
-    untouched -- typically the round's winners, whose outputs stay immediately
-    usable.
+    ``protected_jobs`` are lowercase AF3 job-directory names left untouched,
+    typically the round's winners.
     """
     stats = CleanupStats(mode=mode)
     if mode == "none":
@@ -183,7 +181,7 @@ def run_cleanup_for_round(cfg, out_dir: Path, protected_keys: Iterable[str], rou
     protected: Set[str] = set()
     if settings.keep_winners:
         protected = job_names_to_protect(protected_keys, base_name)
-    # The wildtype reference is cheap to keep and is the run's fixed baseline.
+    # The wildtype is the run's fixed baseline; always keep it.
     protected |= job_names_to_protect([WT_MUTATION_STRING], base_name)
 
     stats = prune_jobs(

@@ -2,19 +2,17 @@
 
 ``recursive_mutation_search`` is called as a library function, not through
 ``mutation_search.py``'s CLI: that CLI unconditionally overwrites the parsed
-``--disallowed_chains`` with ``['A']`` (mutation_search.py:955), so shelling out
-would silently ignore the configured chains. ``analysis_pipeline_integration.py``
-already imports ``mutation_search`` as a library, so this follows existing practice.
+``--disallowed_chains`` with ``['A']``, so shelling out would silently ignore
+the configured chains.
 
 Each seed searches against its own backbone, so a round fans out into one search
 per seed and the results are pooled afterwards. Every pooled candidate has its
-``mutations`` recomputed against the *original* wildtype -- see
-:func:`optimize.seeding.diff_to_wt` for why lineage is derived rather than tracked.
+``mutations`` recomputed against the *original* wildtype (see
+:func:`optimize.seeding.diff_to_wt`).
 
-A caveat worth repeating in any downstream analysis: scores are ddG relative to
-each seed's own backbone and sequence, so they are **not comparable across
-rounds**. Cross-round progress is measured by the structural metrics, which
-share one fixed wildtype baseline.
+Scores are ddG relative to each seed's own backbone and sequence, so they are
+**not comparable across rounds**. Cross-round progress is measured by the
+structural metrics, which share one fixed wildtype baseline.
 """
 
 from __future__ import annotations
@@ -94,9 +92,9 @@ def project_scored_sequences(cfg, n_seeds: int, n_mutable_positions: int) -> Dic
     """Upper bound on sequences scored per depth, summed across seeds.
 
     Depth 1 enumerates every single mutant of each seed; deeper levels enumerate
-    every single mutant of everything kept at the previous depth. This ignores
-    the de-duplication of sequences reachable by different mutation orders, so it
-    over-estimates -- it is meant as a ceiling to sanity-check a config against.
+    every single mutant of everything kept at the previous depth. Ignores the
+    de-duplication of sequences reachable by different mutation orders, so it is
+    a ceiling to sanity-check a config against, not an estimate.
     """
     from math import ceil
 
@@ -203,20 +201,19 @@ def pool_seed_results(
             columns=["sequence", "mutations", "score", *PROVENANCE_COLUMNS]
         )
 
-    # Deliberately NOT deduplicated here. Selection runs per seed, so each seed
-    # must see its own complete candidate set; collapsing across seeds first
-    # would silently remove a sequence from one structure's ranking. Duplicates
-    # are collapsed after selection, in selection.select_from_config.
+    # Not deduplicated here: selection runs per seed, so each seed must see its
+    # own complete candidate set. Duplicates are collapsed after selection, in
+    # selection.select_from_config.
     return pd.concat(frames, ignore_index=True)
 
 
 def dedupe_by_sequence(df: pd.DataFrame, score_col: str = "score") -> pd.DataFrame:
     """Collapse identical sequences, keeping the first occurrence.
 
-    Used within a single structure's results, where ``score`` is comparable. It
-    is NOT used to merge across seeds: PottsMPNN energies come from a different
-    energy table per structure, so "the better score" is not defined between
-    them. Cross-seed duplicates are collapsed positionally after selection.
+    Used within a single structure's results, where ``score`` is comparable, and
+    never to merge across seeds: PottsMPNN energies come from a different energy
+    table per structure, so "the better score" is undefined between them.
+    Cross-seed duplicates are collapsed positionally after selection.
     """
     if df.empty or "sequence" not in df.columns:
         return df
@@ -248,9 +245,9 @@ def run_round_search(
             f"({cfg.search.keep_budget_scope} scope, {len(seeds)} seeds, "
             f"cap {cfg.search.max_keep_per_depth})"
         )
-        # An upper bound on the round's scoring cost, using every residue of the
-        # mutable chains as a ceiling on mutable positions. The interface cutoff
-        # will bring the real number well below this.
+        # Upper bound on the round's scoring cost, using every residue of the
+        # mutable chains as a ceiling on mutable positions; the interface cutoff
+        # brings the real number well below this.
         mutable = sum(
             n for c, n in chain_lengths.items() if c not in set(cfg.search.disallowed_chains)
         )

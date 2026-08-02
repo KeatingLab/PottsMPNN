@@ -35,9 +35,8 @@ def _round_dir(out_dir: Path, index: int) -> Path:
 def _write_report(cfg, out_dir: Path, label: str) -> None:
     """Generate the run report, never letting it break a completed run.
 
-    Plotting is a convenience on top of results that are already safely on
-    disk, so any failure here is reported and swallowed rather than discarding
-    hours of compute.
+    The results it plots are already on disk, so any failure here is reported
+    and swallowed.
     """
     from . import report as report_module
 
@@ -77,9 +76,8 @@ def run_optimization(cfg) -> Dict[str, object]:
 
     executor = build_executor(cfg, str(out_dir / "executor"))
 
-    # The AF3 pipeline prepends a wildtype row to every run, so the reference is
-    # produced alongside the mutants; it is captured from the first round that
-    # actually folds anything and then reused for the rest of the run.
+    # The AF3 pipeline prepends a wildtype row to every run. The baseline is
+    # captured from the first round that folds anything, then reused throughout.
     baseline: Dict[str, float] = dict(state.wt_baseline)
 
     seeds: List[SeedRecord] = state.round(0).seeds or [_initial_seed(wt_sequence)]
@@ -177,8 +175,8 @@ def run_optimization(cfg) -> Dict[str, object]:
         print(f"[round {index}] {_format_stats(stats)}")
 
         # --- prune AF3 byproducts ------------------------------------------
-        # Runs after gating so the round's winners can be left intact, and only
-        # once the round's results are safely written to disk.
+        # After gating, so the round's winners are known and its results are
+        # already on disk.
         if cfg.structure.cleanup.mode != "none":
             winner_keys = [str(k) for k in round_winners.get("mutations", [])]
             cleanup.run_cleanup_for_round(cfg, out_dir, winner_keys, index)

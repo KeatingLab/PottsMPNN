@@ -6,9 +6,8 @@ Two independent decisions are made from a round's structural results:
   in ``gating.beats_wt_on``) and therefore seed the next round.
 * **Termination** -- whether any cutoff has been reached, ending the run early.
 
-Every comparison derives its operator from the metric's declared ``direction``,
-never from a hardcoded assumption: ipSAE is better high, PISA dG is better low,
-and a future metric may be either.
+Every comparison derives its operator from the metric's declared ``direction``:
+ipSAE is better high, PISA dG is better low.
 """
 
 from __future__ import annotations
@@ -67,8 +66,7 @@ def annotate_cutoffs(df: pd.DataFrame, cfg) -> pd.DataFrame:
     """Add per-metric ``meets_cutoff_<metric>`` flags and an overall ``meets_cutoff``.
 
     ``gating.stop_when`` decides whether reaching *any* declared cutoff counts,
-    or whether *all* of them must be reached by the same mutant. Declaring a
-    cutoff for only one metric naturally gives the "just one of the two" case.
+    or whether *all* of them must be reached by the same mutant.
     """
     out = df.copy()
     declared = {
@@ -150,11 +148,10 @@ def winners(df: pd.DataFrame) -> pd.DataFrame:
 def rank_for_promotion(df: pd.DataFrame, cfg) -> pd.DataFrame:
     """Order winners best-first for seeding the next round.
 
-    Ranks on the **structural** metrics only. This is the one point where mutants
-    from different structures are compared, and PottsMPNN energies cannot be used
-    for it: each structure has its own energy table, so ``binding_score`` from
-    seed A means nothing relative to seed B. ipSAE and the PISA terms are
-    absolute measurements of a predicted complex, so they can be.
+    Ranks on the **structural** metrics only: this compares mutants from
+    different structures, and each structure has its own PottsMPNN energy table,
+    so ``binding_score`` from seed A means nothing relative to seed B. ipSAE and
+    the PISA terms are absolute measurements of a predicted complex.
 
     ``gating.promote_by`` picks a single metric; otherwise winners are ordered by
     their mean normalized rank across every metric in ``gating.beats_wt_on``.
@@ -208,9 +205,9 @@ def select_promotions(df: pd.DataFrame, cfg, round_index: int) -> List[SeedRecor
     metrics = list(cfg.gating.metrics.keys())
     seeds: List[SeedRecord] = []
     for position, (_, row) in enumerate(ranked.head(cfg.gating.promote_top_n).iterrows()):
-        # Order-preserving on purpose: these mutations are rejoined into the AF3
-        # job name when the seed's model is looked up, and re-sorting them would
-        # rename the job and make the existing prediction unfindable.
+        # Order-preserving: these mutations are rejoined into the AF3 job name
+        # when the seed's model is looked up, so re-sorting them would rename
+        # the job and make the existing prediction unfindable.
         mutations = split_mutations(row.get("mutations", ""))
         seeds.append(
             SeedRecord(

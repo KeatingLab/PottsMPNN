@@ -481,9 +481,9 @@ def process_row(work_item, shared, input_dir):
         except OSError:
             pass
 
-        # Mark failure if AF3 raised OR if AF3 returned success but outputs are
-        # incomplete (silent crashes, e.g. CUDA OOM mid-sample). The marker
-        # prevents future runs from spawning duplicate timestamped directories.
+        # Mark failure if AF3 raised, or exited 0 with incomplete outputs (silent
+        # crashes, e.g. CUDA OOM mid-sample). The marker prevents future runs
+        # from spawning duplicate timestamped directories.
         if af3_error is not None or not af3_outputs_complete(out_dir, job_name):
             reason = f"AF3 raised: {af3_error}" if af3_error is not None \
                      else "AF3 exited 0 but output is incomplete (likely partial crash)"
@@ -550,8 +550,7 @@ def main():
                          "Tune this so that N * (per-AF3 GPU memory) fits on the H100.")
     args = ap.parse_args()
 
-    # Fail fast if any required input path is missing — better than discovering
-    # mid-run after AF3 has already created output directories.
+    # Fail fast on a missing input path, before AF3 creates output directories.
     for label, p in [("--fasta", args.fasta),
                      ("--msa_json", args.msa_json),
                      ("--pisa_exe", args.pisa_exe),
@@ -642,7 +641,7 @@ def main():
         dG_diss_vals[i]  = pisa["dG_diss"]
 
     if args.max_parallel == 1:
-        # Sequential path: keeps existing behavior, single inputs/ dir
+        # Sequential path: one shared inputs/ dir
         for w in work_items:
             i, ipsae, pisa = process_row(w, shared, input_dir)
             _store(i, ipsae, pisa)

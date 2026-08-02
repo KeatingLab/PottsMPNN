@@ -1,9 +1,9 @@
 """A torch-free stand-in for the mutation search.
 
 ``recursive_mutation_search`` needs torch, a GPU and model weights, none of
-which are needed to exercise the *loop*. This generates plausible candidates
-from a seed sequence with deterministic scores, so selection, gating,
-promotion, re-seeding and resume can all be tested end to end.
+which the loop itself requires. This generates candidates from a seed sequence
+with deterministic scores, so selection, gating, promotion, re-seeding and
+resume can be tested end to end.
 
 Install it by monkeypatching ``optimize.search_stage.run_round_search``.
 """
@@ -55,7 +55,7 @@ def make_candidates(
                 candidate, wt_sequence, lengths=dict(chain_lengths), chain_order=chain_order
             )
             # More mutations trend toward better (more negative) energies, so
-            # successive rounds have something to promote.
+            # each round has something to promote.
             depth = len(mutations)
             rows.append(
                 {
@@ -83,15 +83,15 @@ def stub_run_round_search(
 ):
     """Drop-in replacement for ``search_stage.run_round_search``.
 
-    Only the PottsMPNN scoring is faked. Backbone preparation still runs for
-    real, so the AF3-model -> next-round-backbone path is genuinely exercised.
+    Only the PottsMPNN scoring is faked; backbone preparation runs for real, so
+    the AF3-model -> next-round-backbone path is still exercised.
     """
     from ..search_stage import dedupe_by_sequence, prepare_seed_backbone
 
     frames: List[pd.DataFrame] = []
     for seed in seeds:
-        # Real backbone preparation: converts the seed's AF3 model, or rewrites
-        # the wildtype backbone with the seed's sequence.
+        # Converts the seed's AF3 model, or rewrites the wildtype backbone with
+        # the seed's sequence.
         seed.backbone_pdb = prepare_seed_backbone(
             seed, cfg, round_dir, wt_atoms, chain_order, chain_lengths, out_dir=out_dir,
         )

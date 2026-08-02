@@ -1,25 +1,12 @@
 """Re-seeding a mutation search onto a new sequence and/or a new backbone.
 
-The Potts energy table is a pure function of structure -- ``model.run_encoder``
-takes only coordinates, masks, and chain encodings. The sequence stored in the
-``parse_PDB`` dict is used solely for (a) lengths during featurization, (b)
-per-chain slicing, and (c) the ddG reference inside ``run_utils.get_etab``.
+The Potts energy table depends only on structure, so overriding the sequence in
+the ``parse_PDB`` dict redefines "wildtype" for the whole scoring stack. Both
+``seq`` and every ``seq_chain_<X>`` must be written: ``get_etab`` takes the
+bound reference from ``seq`` and the partition reference from ``seq_chain_<X>``,
+so overriding only one makes them disagree.
 
-That makes :func:`apply_sequence_override` sufficient to redefine "wildtype" for
-the entire scoring stack in one step, which in turn fixes every place
-``mutation_search`` assumes the starting sequence is the PDB's own:
-
-* ``wt_sequence = pdb_entry["seq"]``                     (mutation_search.py:408)
-* interface masking via ``_mask_sequence_to_interface``  (mutation_search.py:435-438)
-* the ``!= wt_sequence`` scoring skips                   (mutation_search.py:443, 463-467)
-* ``_partition_sequence`` slicing                        (mutation_search.py:87-102)
-
-Both ``seq`` and every ``seq_chain_<X>`` must be written. ``get_etab`` builds
-the *bound* reference from ``['seq']`` but the *partition* reference from
-``seq_chain_<X>`` (run_utils.py:816-823); overriding only one makes the bound
-and unbound references silently disagree.
-
-This module deliberately avoids importing torch so it stays cheap to test.
+Avoids importing torch so it stays cheap to test.
 """
 
 from __future__ import annotations
@@ -29,8 +16,7 @@ import re
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
-# Mutation token format emitted by mutation_search._format_mutation:
-#   "<chain>:<wt><1-indexed position within chain><mut>"   e.g. "B:W102E"
+# "<chain>:<wt><1-indexed position within chain><mut>", e.g. "B:W102E".
 MUTATION_TOKEN_RE = re.compile(r"^([^:]+):([A-Z])(\d+)([A-Z])$")
 
 BACKBONE_ATOMS = ("N", "CA", "C", "O")
@@ -82,11 +68,10 @@ def parse_mutation_token(token: str) -> Tuple[str, str, int, str]:
 def split_mutations(mutation_str) -> List[str]:
     """Split a comma-joined mutation string, **preserving order**. NaN-safe.
 
-    Order matters wherever a mutation string is turned into an identifier: the
-    AF3 job directory name is built by joining the tokens in the order given
-    (run_mutation_af3_pipeline.py:66), so re-ordering them renames the job and
-    makes an existing prediction unfindable. Use this -- not
-    :func:`parse_mutation_tokens` -- anywhere the string round-trips into a name.
+    The AF3 job directory name joins the tokens in the order given, so
+    re-ordering them renames the job and makes an existing prediction
+    unfindable. Use this -- not :func:`parse_mutation_tokens` -- anywhere the
+    string round-trips into a name.
     """
     if mutation_str is None:
         return []
@@ -99,10 +84,9 @@ def split_mutations(mutation_str) -> List[str]:
 def parse_mutation_tokens(mutation_str) -> Tuple[str, ...]:
     """Split a comma-joined mutation string into a **sorted** token tuple.
 
-    Ported from ``mutation_search.ipynb``; tolerates NaN/empty for the wildtype
-    row. Sorting makes this a canonical *set* for similarity comparisons -- it
-    must not be used to rebuild identifiers, since it discards the original
-    order (see :func:`split_mutations`).
+    Tolerates NaN/empty for the wildtype row. Sorting makes this a canonical
+    *set* for similarity comparisons; it discards the original order, so it must
+    not be used to rebuild identifiers (see :func:`split_mutations`).
     """
     return tuple(sorted(split_mutations(mutation_str)))
 
@@ -165,12 +149,10 @@ def diff_to_wt(
 ) -> List[str]:
     """Mutation tokens describing ``sequence`` relative to ``wt_sequence``.
 
-    This is how cross-round mutation bookkeeping is done. ``recursive_mutation_search``
-    seeds each round with ``mutations=()`` (mutation_search.py:818), so a re-seeded
-    round only reports that round's own changes. Rather than thread fragile lineage
-    state through the loop, every candidate is diffed against the *original* wildtype.
-    Positions map 1:1 because sequence length and chain layout are preserved across
-    rounds, and the result is self-correcting: a reversion simply stops appearing.
+    Cross-round lineage is derived rather than tracked: a re-seeded search only
+    reports that round's own changes, so every candidate is diffed against the
+    original wildtype instead. Positions map 1:1 because sequence length and
+    chain layout are preserved across rounds.
 
     Either pass ``pdb_entry`` or both ``lengths`` and ``chain_order``.
     """
@@ -268,7 +250,6 @@ def find_af3_model(
     """Locate the top-ranked structure file AF3 wrote for one prediction.
 
     The glob list is tried in order, so the most specific naming convention wins.
-    Adjust ``structure.af3_model_glob`` once the real pipeline's layout is known.
     """
     root = Path(af3_dir)
     if not root.exists():
@@ -285,8 +266,8 @@ def find_af3_model(
 def _read_cif_backbone(path: Path) -> List[dict]:
     """Minimal ``_atom_site`` reader returning backbone atom records.
 
-    Used only when neither gemmi nor Biopython is importable. ``parse_PDB`` reads
-    just N/CA/C/O, so nothing else needs to survive the conversion.
+    ``parse_PDB`` reads just N/CA/C/O, so nothing else needs to survive the
+    conversion.
     """
     columns: List[str] = []
     rows: List[dict] = []
@@ -332,8 +313,8 @@ def _cif_to_backbone_atoms(path: Path) -> List[dict]:
     for row in rows:
         resname = pick(row, "auth_comp_id", "label_comp_id", default="UNK")
         group = pick(row, "group_PDB", default="ATOM")
-        # Same rule as the PDB reader: ATOM only, with MSE promoted to MET.
-        # Admitting HETATM wholesale would let waters and ligands through.
+        # ATOM only, with MSE promoted to MET; admitting HETATM wholesale would
+        # let waters and ligands through.
         if group == "HETATM" and resname == "MSE":
             group, resname = "ATOM", "MET"
         if group != "ATOM":
@@ -398,9 +379,8 @@ def _write_backbone_pdb(atoms: Sequence[dict], out_path: Path, chain_order: Sequ
     out_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
-# parse_PDB walks this alphabet and appends chains in the order it finds them,
-# so chain_order is alphabet order -- not the order chains appear in the file
-# (data_utils.py:157-159, 170, 188).
+# parse_PDB walks this alphabet, so chain_order is alphabet order -- not the
+# order the chains appear in the file.
 PARSE_PDB_ALPHABET = (
     list("ABCDEFGHIJKLMNOPQRSTUVWXYZ")
     + list("abcdefghijklmnopqrstuvwxyz")
@@ -452,13 +432,10 @@ def write_backbone_with_sequence(
 ) -> str:
     """Write a backbone PDB whose residue names spell out ``sequence``.
 
-    ``recursive_mutation_search`` parses its own PDB (mutation_search.py:784), so
-    an in-memory override cannot reach it. Encoding the seed sequence in the
-    file's residue names makes the backbone self-describing instead: whatever
-    parses it -- the search, or AF3 downstream -- sees the intended sequence.
-
-    Only N/CA/C/O are ever read by PottsMPNN, so the absent sidechains for
-    substituted residues are immaterial.
+    ``recursive_mutation_search`` parses its own PDB, so an in-memory override
+    cannot reach it; encoding the seed sequence in the residue names makes the
+    backbone self-describing instead. Only N/CA/C/O are read by PottsMPNN, so
+    the absent sidechains for substituted residues are immaterial.
     """
     target = Path(out_path)
     keys = _residue_keys_in_order(atoms, chain_order)
@@ -519,11 +496,8 @@ def prepare_backbone_from_af3(
     Preserves the original chain IDs, chain order, and per-chain lengths so the
     binding partitions and interface mask stay valid in the next round. Raises
     if the converted structure does not match the expected layout -- a silent
-    mismatch would misalign every mutation position.
-
-    An AF3 model already encodes the mutant sequence in its residue names, so
-    passing ``expected_sequence`` checks that AF3 actually folded the sequence
-    we asked for. That is a stricter guarantee than the length check alone.
+    mismatch would misalign every mutation position. ``expected_sequence``
+    additionally checks that AF3 folded the sequence it was asked for.
 
     ``chain_map`` renames AF3 chain IDs onto the originals (e.g. ``{"A": "A", "B": "B"}``).
     """
@@ -570,11 +544,10 @@ def prepare_backbone_from_af3(
 def _pdb_to_backbone_atoms(path: Path) -> List[dict]:
     """Read backbone atoms from a PDB file (first model, altloc blank/A only).
 
-    Mirrors ``data_utils.parse_PDB_biounits`` (line 100-104): only ``ATOM``
-    records count, with selenomethionine ``HETATM``/``MSE`` promoted to ``MET``.
-    Accepting all ``HETATM`` records would drag in waters and ligands -- an
-    ``HOH`` oxygen is named ``O`` and would otherwise pass the backbone filter,
-    inflating chain lengths and misaligning every mutation position.
+    Mirrors ``data_utils.parse_PDB_biounits``: only ``ATOM`` records count, with
+    selenomethionine ``HETATM``/``MSE`` promoted to ``MET``. An ``HOH`` oxygen is
+    named ``O``, so accepting all ``HETATM`` records would inflate chain lengths
+    and misalign every mutation position.
     """
     atoms: List[dict] = []
     with open(path, "r", encoding="utf-8") as handle:
@@ -617,13 +590,13 @@ def _validate_backbone(
     """Re-parse the written PDB with ``parse_PDB`` and check the layout.
 
     Confirmatory: chain order, lengths and sequence were already verified from
-    the atom records. This additionally proves the *written file* parses the way
-    the search will read it, catching any PDB formatting error.
+    the atom records. This proves the *written file* parses the way the search
+    will read it, catching any PDB formatting error.
     """
     try:
         from data_utils import parse_PDB  # local import: pulls torch
     except ImportError as exc:
-        # Only reachable off-cluster; the atom-level invariants still hold.
+        # The atom-level invariants still hold.
         print(
             f"  NOTE: skipping confirmatory parse_PDB check for {pdb_path} "
             f"({exc}). Chain order, lengths and sequence were already verified."

@@ -8,9 +8,9 @@ or cluster access.
 
 Contract reproduced (see run_mutation_af3_pipeline.py):
 
-* writes ``<out_dir>/<input_csv_stem>_with_af3.csv``          (line 665-669)
-* prepends a ``mutations == "WT"`` row                        (line 594-597)
-* adds ``ipSAE``, ``int_area``, ``dG_binding``, ``dG_diss``   (line 660-663)
+* writes ``<out_dir>/<input_csv_stem>_with_af3.csv``
+* prepends a ``mutations == "WT"`` row
+* adds ``ipSAE``, ``int_area``, ``dG_binding``, ``dG_diss``
 * creates ``<out_dir>/<job_name>/seed-1_sample-N/*_model.cif`` plus the
   ``*_model_<pae>_<dist>.txt`` ipSAE report beside each model
 """
@@ -42,8 +42,7 @@ def _unit_hash(text: str, salt: str) -> float:
 def _count_mutations(mutations) -> int:
     """Mutation count, treating NaN/empty/'WT' as the wildtype.
 
-    An empty ``mutations`` string round-trips through CSV as NaN, so a naive
-    ``str(x).split(",")`` would count the wildtype as having one mutation.
+    An empty ``mutations`` string round-trips through CSV as NaN.
     """
     if mutations is None:
         return 0
@@ -161,9 +160,8 @@ def _emit_af3_outputs(out_dir: Path, base_name: str, mutations, chain_seqs: dict
         score = ipsae if sample == 0 else ipsae - 0.05 * sample
         _write_ipsae_report(Path(f"{stem}_{pae_cutoff:02d}_{dist_cutoff:02d}.txt"), score)
 
-        # The byproducts the real pipeline leaves behind. The PAE matrix is
-        # O(tokens^2) and is what the cleanup stage targets; a coarse stand-in is
-        # enough to exercise it without writing tens of MB in a test.
+        # The byproducts the real pipeline leaves behind, coarsened: the cleanup
+        # stage targets the O(tokens^2) PAE matrix.
         row = ",".join("0.0" for _ in range(min(n_tokens, 64)))
         Path(f"{stem}_confidences.json").write_text(
             '{"pae": [' + ",".join(f"[{row}]" for _ in range(min(n_tokens, 64))) + "]}",

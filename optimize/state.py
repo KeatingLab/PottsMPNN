@@ -1,6 +1,5 @@
 """Durable run state: resume markers, seed lineage, and the AF3 result cache.
 
-Nothing else in this repository checks for existing output before recomputing.
 An AF3 round is many GPU-hours, so every stage records a completion marker here
 and a preempted run resumes at the last completed stage rather than from zero.
 

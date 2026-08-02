@@ -1,19 +1,19 @@
 """Locating AF3 outputs written by ``run_mutation_af3_pipeline.py``.
 
 That script derives its AF3 job name from the mutation string in a specific way,
-and picks the best of three diffusion samples by ipSAE. To re-seed the next round
-on "the AF3 structure of this mutant" we have to reproduce both steps exactly.
+and picks the best of three diffusion samples by ipSAE. Re-seeding the next round
+on "the AF3 structure of this mutant" reproduces both steps exactly.
 
-Job naming (run_mutation_af3_pipeline.py:463, 410, 66)::
+Job naming::
 
     tokens   = [f"{chain}{wt}{resnum}{mut}" for each mutation]   # "B:W102E" -> "BW102E"
     job_name = safe_token(f"{base_name}__{'_'.join(tokens)}")
     job_dir  = out_dir / job_name.lower()[_YYYYMMDD_HHMMSS]
 
-Model selection (run_mutation_af3_pipeline.py:502-519): for each
-``seed-*_sample-*`` directory the pipeline runs ipSAE and keeps the structure
-with the highest minimum asymmetric ipSAE. It leaves the ipSAE report next to
-each model, so the same choice can be recovered without re-running anything.
+Model selection: for each ``seed-*_sample-*`` directory the pipeline runs ipSAE
+and keeps the structure with the highest minimum asymmetric ipSAE. It leaves the
+ipSAE report next to each model, so the same choice can be recovered without
+re-running anything.
 """
 
 from __future__ import annotations
@@ -33,7 +33,7 @@ WT_MUTATION_STRING = "WT"
 def read_fasta_base_name(fasta_path: str) -> str:
     """The job-name prefix: the first ``|``-separated field of the FASTA header.
 
-    Mirrors ``run_mutation_af3_pipeline.parse_fasta`` (line 32-35).
+    Mirrors ``run_mutation_af3_pipeline.parse_fasta``.
     """
     with open(fasta_path, "r", encoding="utf-8") as handle:
         lines = [line.strip() for line in handle if line.strip()]
@@ -60,15 +60,15 @@ def read_fasta_chain_seqs(fasta_path: str) -> Tuple[str, dict]:
 
 
 def _safe_token(text: str) -> str:
-    """``run_mutation_af3_pipeline.safe_token`` (line 410-411)."""
+    """``run_mutation_af3_pipeline.safe_token``."""
     return text.replace(":", "_").replace(",", "_").replace(" ", "")
 
 
 def mutation_af3_tokens(mutations) -> List[str]:
     """Convert ``"B:W102E,B:I110S"`` into ``["BW102E", "BI110S"]``.
 
-    Matches the token format built in ``apply_mutations`` (line 66), which drops
-    the colon. Order follows the mutation string, as the pipeline does.
+    Matches the token format built in ``apply_mutations``, which drops the
+    colon. Order follows the mutation string, as the pipeline does.
     """
     text = "" if mutations is None else str(mutations).strip()
     if text == "" or text.lower() == "nan" or text == WT_MUTATION_STRING:
@@ -91,7 +91,7 @@ def af3_job_name(base_name: str, mutations) -> str:
 def find_job_dirs(out_dir: str, job_name: str) -> List[str]:
     """All output directories for a job, including AF3's timestamped variants.
 
-    Mirrors ``run_mutation_af3_pipeline.find_job_dirs`` (line 214-222).
+    Mirrors ``run_mutation_af3_pipeline.find_job_dirs``.
     """
     job_lower = job_name.lower()
     matches = glob(os.path.join(str(out_dir), job_lower)) + glob(
@@ -101,7 +101,7 @@ def find_job_dirs(out_dir: str, job_name: str) -> List[str]:
 
 
 def _min_asym_ipsae(ipsae_txt: Path) -> float:
-    """Lowest asymmetric ipSAE in a report; ``run_mutation_af3_pipeline`` line 267-272."""
+    """Lowest asymmetric ipSAE in a report, as ``run_mutation_af3_pipeline`` reads it."""
     import pandas as pd
 
     try:
@@ -153,11 +153,11 @@ def find_best_model(
 def candidate_job_names(base_name: str, mutations) -> List[str]:
     """Job names for every plausible ordering of a mutant's tokens.
 
-    The job name is the tokens joined in the order they appear, so the same
-    mutant yields different names depending on how the string was assembled
+    The job name joins the tokens in the order they appear, so the same mutant
+    yields different names depending on how the string was assembled
     (``B:L5D,B:E6D`` vs ``B:E6D,B:L5D``). The loop writes them in positional
-    order, but a hand-made CSV or an older run may not, and a mismatch shows up
-    only as a confusing "no model found". Trying the orderings is cheap.
+    order, but a hand-made CSV may not, and a mismatch shows up only as a
+    confusing "no model found".
     """
     tokens = split_mutations(mutations)
     if len(tokens) < 2:
@@ -203,5 +203,5 @@ def find_model_for_mutant(
 
 
 def failure_marker(out_dir: str, base_name: str, mutations) -> Path:
-    """Path of the ``.failed`` marker the pipeline writes on AF3 failure (line 465)."""
+    """Path of the ``.failed`` marker the pipeline writes on AF3 failure."""
     return Path(out_dir) / f"{af3_job_name(base_name, mutations)}.failed"

@@ -1,10 +1,7 @@
 """Configuration schema for the iterative optimization loop.
 
-Follows the repository's OmegaConf house style (see
-``inputs/example_config_energy_prediction.yaml``): flat run keys plus nested
-blocks, ``null`` for unset paths. The schema is declared with dataclasses so
-OmegaConf can type-check the YAML, and :func:`validate` adds the cross-field
-checks that a type system cannot express.
+Declared with dataclasses so OmegaConf can type-check the YAML;
+:func:`validate` adds the cross-field checks a type system cannot express.
 """
 
 from __future__ import annotations
@@ -44,10 +41,10 @@ class RunConfig:
     # Overwrite completed-stage markers and recompute everything.
     force: bool = False
     # Write <out_dir>/report/ (self-contained HTML + ranked CSV) when the run
-    # ends, however it ends -- including an early stop.
+    # ends, including on an early stop.
     report: bool = True
     # Also refresh the report after every round, so a long run can be inspected
-    # while it is still going. Cheap next to a fold, but not free.
+    # while it is still going.
     report_each_round: bool = False
 
 
@@ -74,11 +71,9 @@ class SearchConfig:
     top_percent_decay_base: float = 1.0
     max_keep_per_depth: int = 1000
     # Whether max_keep_per_depth is a budget for the whole round or for each
-    # seed. A round fans out into one search per promoted seed, and the number
-    # of sequences SCORED at depth d is (kept at depth d-1) x (mutable
-    # positions x 19) -- so a per-seed cap multiplies the round's scoring cost
-    # by the number of seeds. "global" divides the cap across seeds so the
-    # round's cost stays flat as promote_top_n grows.
+    # seed. A per-seed cap multiplies the round's scoring cost by the number of
+    # seeds; "global" divides the cap across seeds so the cost stays flat as
+    # promote_top_n grows.
     keep_budget_scope: str = "global"  # global | per_seed
     per_position_quota: Optional[int] = 100
     disallowed_chains: List[str] = field(default_factory=list)
@@ -107,10 +102,9 @@ class SelectionConfig:
 
     # PottsMPNN builds a different energy table per structure, so its energies
     # are NOT comparable between seeds. "per_seed" ranks each seed's candidates
-    # only against its own structure-mates and gives each seed a share of
-    # max_candidates; cross-structure comparison then happens solely on the
-    # AF3/PISA metrics, which are absolute. "pooled" ranks everything together
-    # and is only valid when a round has a single seed.
+    # against its own structure-mates only and gives each seed a share of
+    # max_candidates. "pooled" ranks everything together and is only valid when
+    # a round has a single seed.
     scope: str = "per_seed"  # per_seed | pooled
     # A column name, one of DERIVED_OBJECTIVES, or a pandas-eval expression.
     objective: str = "binding_score"
@@ -129,17 +123,14 @@ class SelectionConfig:
 class ResultsAdapter:
     """How to find and read the AF3/PISA/ipSAE pipeline's output.
 
-    Kept fully config-driven so the loop can be exercised against a stub before
-    the real ``run_mutation_af3_pipeline.py`` is available, and so a change in
-    that script's output format is a config edit rather than a code change.
+    Config-driven so a change in that script's output format is a config edit
+    rather than a code change.
     """
 
-    # Glob for the pipeline's result CSV, relative to the shared AF3 output dir.
-    # run_mutation_af3_pipeline.py writes "<input_csv_stem>_with_af3.csv" there,
-    # alongside inputs/, pisa_cfgs/ and the AF3 job directories -- so this must
-    # not be a bare "*.csv". Keep the "{stem}" placeholder: it is substituted
-    # with the round's input CSV stem so a round reads only its own results,
-    # rather than every round's out of the shared directory.
+    # Glob for the pipeline's result CSV, relative to the shared AF3 output dir,
+    # which also holds inputs/, pisa_cfgs/ and the AF3 job directories -- so this
+    # must not be a bare "*.csv". The "{stem}" placeholder is substituted with the
+    # round's input CSV stem, so a round reads only its own results.
     results_glob: str = "{stem}_with_af3.csv"
     # The pipeline passes the input CSV through and requires a "mutations" column.
     mutation_key_column: str = "mutations"
@@ -149,8 +140,6 @@ class ResultsAdapter:
     #   dG_binding  interface solvation energy (int_solv_en)    better LOW
     #   dG_diss     dissociation free energy of the assembly    better HIGH
     #   int_area    buried interface area                       (not a gate)
-    # dG_binding is the default because it is the metric the existing analysis
-    # notebooks and plots use; dG_diss is available by swapping it in here.
     metric_columns: Dict[str, str] = field(
         default_factory=lambda: {"ipsae": "ipSAE", "dG_binding": "dG_binding"}
     )
@@ -164,19 +153,19 @@ class ResultsAdapter:
 class CleanupConfig:
     """Pruning AF3 byproducts after each round.
 
-    AF3's PAE/confidence matrices are O(tokens^2) per diffusion sample and
-    dominate disk use over a multi-round run. They are consumed once, by ipSAE,
-    and never read again. Structures (``*_model.cif``) and ipSAE reports are
-    never pruned -- the RMSD gate and re-seeding depend on them.
+    AF3's PAE/confidence matrices are O(tokens^2) per diffusion sample, are
+    consumed once by ipSAE, and dominate disk use over a multi-round run.
+    Structures (``*_model.cif``) and ipSAE reports are never pruned -- the RMSD
+    gate and re-seeding depend on them.
     """
 
     mode: str = "compress"  # none | compress | delete
-    # Leave the round's winners completely untouched, so anything still in play
-    # stays immediately usable.
+    # Leave the round's winners untouched, so anything still in play stays
+    # immediately usable.
     keep_winners: bool = True
-    # File classes to prune. "summary" is included deliberately: it is the
-    # pipeline's completeness marker, and keeping it while removing the PAE
-    # would make a forced rerun skip inference and then silently yield NaN.
+    # File classes to prune. "summary" is the pipeline's completeness marker;
+    # keeping it while removing the PAE would make a forced rerun skip inference
+    # and then silently yield NaN.
     targets: List[str] = field(default_factory=lambda: ["pae", "pisa", "summary"])
 
 
@@ -197,9 +186,9 @@ class StructureConfig:
     # The pipeline otherwise skips a failed mutant permanently -- including the
     # wildtype, which leaves the run with no baseline.
     retry_failed: bool = False
-    # Must match the pipeline's own defaults, since the ipSAE report filename
-    # embeds both cutoffs and we read those reports back to pick each mutant's
-    # best model when re-seeding.
+    # Must match the pipeline's own defaults: the ipSAE report filename embeds
+    # both cutoffs, and those reports are read back to pick each mutant's best
+    # model when re-seeding.
     pae_cutoff: int = 10
     dist_cutoff: int = 15
     python_executable: str = "python"
@@ -227,10 +216,10 @@ class MetricSpec:
 class RmsdGate:
     """Reject a mutant whose AF3 prediction drifts too far from its reference.
 
-    AF3 sometimes predicts a substantially different fold or binding pose for a
-    mutant; when it does, the ipSAE/PISA scores describe a structure other than
-    the one the search reasoned about. A mutant failing this gate is disqualified
-    from both promotion and the stop-cutoff.
+    When AF3 predicts a substantially different fold or binding pose, the
+    ipSAE/PISA scores describe a structure other than the one the search
+    reasoned about. A mutant failing this gate is disqualified from both
+    promotion and the stop-cutoff.
     """
 
     enabled: bool = True
@@ -245,10 +234,9 @@ class RmsdGate:
     #                (CAPRI ligand-RMSD localized to the binding site)
     #   binder    -- superpose and score on the binder alone (fold check only)
     #   complex   -- superpose and score over everything
-    # "complex" is only meaningful for a small single-domain complex. Over a
-    # large multi-domain target it is wrong in BOTH directions: distal domain
-    # motion fails good candidates, while a real binder displacement is diluted
-    # across the whole structure and slips under the threshold.
+    # "complex" is only meaningful for a small single-domain complex: over a
+    # large multi-domain target, distal domain motion fails good candidates while
+    # a real binder displacement is diluted below the threshold.
     scope: str = "interface"  # interface | binder | complex
     # Target atoms within this distance of the binder define the frame that
     # "interface" scope superposes on.
@@ -261,10 +249,8 @@ class GatingConfig:
 
     # ipSAE: interface confidence, better high.
     # dG_binding: PISA interface solvation energy, better LOW (more negative is
-    # more favourable) -- this is the metric the existing analysis plots use.
-    # If you swap in dG_diss instead, its direction is "max": it is a
-    # dissociation free energy, so higher means harder to pull apart. Mixing
-    # these up silently inverts the gate rather than raising an error.
+    # more favourable). dG_diss is a dissociation free energy, so its direction
+    # is "max"; mixing the two up silently inverts the gate.
     metrics: Dict[str, MetricSpec] = field(
         default_factory=lambda: {
             "ipsae": MetricSpec(direction="max", cutoff=None),
@@ -401,7 +387,7 @@ def validate(cfg: DictConfig) -> None:
     if not cfg.gating.beats_wt_on:
         raise ValueError("gating.beats_wt_on must list at least one metric.")
     if all(spec.cutoff is None for spec in cfg.gating.metrics.values()):
-        # Legal, but the run can then only end via max_iterations / no winners.
+        # Legal: the run can then only end via max_iterations / no winners.
         pass
     if cfg.gating.promote_by is not None and cfg.gating.promote_by not in cfg.gating.metrics:
         known = ", ".join(sorted(cfg.gating.metrics.keys()))

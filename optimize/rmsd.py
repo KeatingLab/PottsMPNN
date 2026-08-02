@@ -6,12 +6,9 @@ ipSAE/PISA numbers then describe a different structure than the one that was
 scored.
 
 RMSD is computed after Kabsch superposition -- AF3 output and the reference sit
-in arbitrary coordinate frames, so an unaligned RMSD would be meaningless.
-Residues are paired **positionally** within each chain (i-th residue of a chain
-in one structure to the i-th of the same chain in the other), which is robust to
-the two files numbering residues differently, as long as the per-chain counts
-match. They always should here: AF3 folds the exact mutant sequence and the
-reference has the same chain layout and lengths (enforced elsewhere).
+in arbitrary coordinate frames. Residues are paired **positionally** within each
+chain, which is robust to the two files numbering residues differently as long
+as the per-chain counts match.
 
 Only numpy is needed; structures are read with the existing torch-free readers.
 """
@@ -59,10 +56,9 @@ def superposed_rmsd(
 ) -> float:
     """RMSD over ``*_eval`` after superposing on ``*_fit``.
 
-    Separating the two sets is the whole point: fitting on the binding site and
-    scoring the binder measures binding-pose change, while a global fit over a
-    large multi-domain target is dominated by domain motion far from the
-    interface.
+    Separating the two sets lets the binding site define the frame while the
+    binder is scored, so the result is not dominated by domain motion far from
+    the interface.
     """
     rotation, mc, tc = kabsch_transform(model_fit, ref_fit)
     aligned = apply_transform(model_eval, rotation, mc, tc)
@@ -193,18 +189,17 @@ def structure_rmsd(
 ) -> float:
     """Superposed RMSD between a model file and a reference file.
 
-    ``scope`` chooses *what is being asked*:
+    ``scope`` chooses what is measured:
 
     * ``complex``   -- superpose and score over everything. Meaningful only for a
       small, single-domain complex: over a large multi-domain target, rigid-body
-      domain motion far from the binding site dominates and swamps any real
-      signal (a point mutant can easily read >10 A).
+      domain motion far from the binding site swamps any real signal (a point
+      mutant can easily read >10 A).
     * ``interface`` -- superpose on the target atoms within ``interface_cutoff``
-      of the binder, then score the binder. This is CAPRI ligand-RMSD localized
-      to the binding site: "relative to the pocket, did the binder move or
-      misfold?" -- the question the gate is actually meant to ask.
-    * ``binder``    -- superpose and score over the binder alone: a pure fold
-      check that ignores placement entirely.
+      of the binder, then score the binder: CAPRI ligand-RMSD localized to the
+      binding site.
+    * ``binder``    -- superpose and score over the binder alone: a fold check
+      that ignores placement entirely.
 
     ``model_chain_map`` renames the model's chains onto ``chain_order`` (the
     reference's chain ids); the reference is assumed already normalized.

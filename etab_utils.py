@@ -400,10 +400,8 @@ def seqs_to_tensor(sequences, dev='cpu'):
 
     Given an iterable of equal-length one-letter sequences, return an int64
     tensor of shape (n, L). Equivalent to
-    ``torch.stack([seq_to_tensor(s) for s in sequences])`` but performs the
-    encoding with a single vectorized numpy lookup instead of a per-residue
-    Python dict loop. This keeps host-side tokenization from starving the GPU
-    when scoring tens of thousands of sequences.
+    ``torch.stack([seq_to_tensor(s) for s in sequences])`` but encodes with a
+    single vectorized numpy lookup instead of a per-residue Python dict loop.
     """
     sequences = list(sequences)
     if not sequences:

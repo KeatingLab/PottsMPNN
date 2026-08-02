@@ -11,9 +11,9 @@ Wraps ``run_mutation_af3_pipeline.py``, whose contract is:
   (``mutations == "WT"``) prepended.
 
 All rounds share **one** AF3 output directory. The pipeline skips any job whose
-outputs are already complete (line 471), so a mutant seen in an earlier round --
-including the wildtype -- is never re-folded, and every model lives under a
-single root for re-seeding.
+outputs are already complete, so a mutant seen in an earlier round -- including
+the wildtype -- is never re-folded, and every model lives under a single root
+for re-seeding.
 """
 
 from __future__ import annotations
@@ -39,13 +39,9 @@ def shared_structure_dir(out_dir: Path) -> Path:
 def write_folding_csv(df: pd.DataFrame, path: Path) -> str:
     """Write the folding set in the shape the AF3 pipeline consumes.
 
-    This is the ``ranked_mutations_*.csv`` artifact: the file the AF3 stage has
-    always read but which nothing in the repository ever produced -- it came
-    from an unsaved notebook cell.
-
     ``to_csv`` quotes any field containing a comma, which the pipeline checks
-    for explicitly (line 579-588): an unquoted multi-mutation string would be
-    split across columns and rejected.
+    for explicitly: an unquoted multi-mutation string would be split across
+    columns and rejected.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
     out = df.copy()
@@ -155,9 +151,8 @@ def parse_results(out_dir: Path, cfg, input_csv: Optional[str] = None) -> pd.Dat
 def extract_wildtype_baseline(results: pd.DataFrame, cfg) -> Optional[Dict[str, float]]:
     """Pull the wildtype metrics out of a results frame.
 
-    The pipeline prepends a ``mutations == "WT"`` row to every run (line 596),
-    so the reference is produced alongside the mutants rather than needing its
-    own job.
+    The pipeline prepends a ``mutations == "WT"`` row to every run, so the
+    reference is produced alongside the mutants rather than needing its own job.
     """
     wt_rows = results[results[KEY_COLUMN] == WT_KEY]
     if wt_rows.empty:
@@ -173,11 +168,10 @@ def extract_wildtype_baseline(results: pd.DataFrame, cfg) -> Optional[Dict[str, 
 def _raise_no_baseline(
     results: pd.DataFrame, cfg, structure_dir: Path, round_index: int, job
 ) -> None:
-    """Explain *why* the wildtype reference is unusable, and how to recover.
+    """Explain why the wildtype reference is unusable, and how to recover.
 
-    Distinguishes an absent ``WT`` row from one whose metrics are all NaN -- the
-    latter means AF3 ran but failed for the wildtype, which is not obvious from
-    the row simply being there.
+    Distinguishes an absent ``WT`` row from one whose metrics are all NaN, which
+    means AF3 ran but failed for the wildtype.
     """
     from .af3_layout import failure_marker, read_fasta_base_name
 
@@ -248,11 +242,10 @@ def handle_failed_markers(
     """Warn about -- or clear -- ``.failed`` markers for this round's candidates.
 
     ``run_mutation_af3_pipeline.py`` writes ``<job>.failed`` when AF3 dies and
-    then skips that mutant **permanently** on every future run (line 467). That
-    is right for a genuinely impossible input, but wrong after a transient or
-    misconfigured failure such as GPU OOM -- and if the wildtype is among them,
-    a rerun can never recover a baseline. Neither our sequence cache nor a resume
-    clears these, so surface them explicitly.
+    then skips that mutant **permanently** on every future run. That is right for
+    a genuinely impossible input but wrong after a transient failure such as GPU
+    OOM, and if the wildtype is among them a rerun can never recover a baseline.
+    Nothing else clears these, so surface them explicitly.
     """
     from .af3_layout import failure_marker, read_fasta_base_name
 
@@ -298,12 +291,11 @@ def compute_rmsd_column(
 ) -> pd.DataFrame:
     """Add an ``rmsd`` column: predicted structure vs. the mutant's reference.
 
-    RMSD-to-seed is not a function of the sequence alone (it depends on which
-    seed the mutant came from), so it is computed fresh here every round rather
-    than cached like the sequence-intrinsic ipSAE/PISA metrics. Recomputing is
-    cheap: the AF3 model already exists on disk, so this only re-reads
-    coordinates. Anything that cannot be located or paired yields ``NaN``, which
-    the gate treats as a failure.
+    RMSD-to-seed depends on which seed the mutant came from, not on the sequence
+    alone, so it is recomputed every round rather than cached like the
+    sequence-intrinsic ipSAE/PISA metrics; the AF3 model is already on disk, so
+    this only re-reads coordinates. Anything that cannot be located or paired
+    yields ``NaN``, which the gate treats as a failure.
     """
     from .af3_layout import find_model_for_mutant, read_fasta_base_name
     from .config import resolve_binder_chains
@@ -322,9 +314,8 @@ def compute_rmsd_column(
     skipped = 0
     for _, row in out.iterrows():
         mutations = str(row[KEY_COLUMN])
-        # A candidate with no structural metrics has no usable model either, and
-        # is already excluded downstream. Reporting each one here would bury the
-        # real failure under one message per candidate.
+        # A candidate with no structural metrics has no usable model either and
+        # is already excluded downstream; count them instead of reporting each.
         if metrics and any(pd.isna(row.get(m)) for m in metrics):
             values.append(float("nan"))
             skipped += 1

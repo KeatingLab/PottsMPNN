@@ -4,10 +4,10 @@ Reads a run's ``round_*/round_summary.csv`` plus ``run_state.json`` and writes a
 self-contained HTML report (plots inlined, no external files) alongside a ranked
 CSV of every candidate ever folded.
 
-Metric names and directions are discovered from the data rather than assumed:
-the gating stage writes a ``beats_wt_<metric>`` column per metric, and the
-wildtype baseline in ``run_state.json`` fixes which way is better. So a run
-gated on ``dG_diss`` reports correctly without reconfiguration.
+Metric names and directions are discovered from the data: the gating stage
+writes a ``beats_wt_<metric>`` column per metric, and the wildtype baseline in
+``run_state.json`` fixes which way is better, so a run gated on ``dG_diss``
+reports correctly without reconfiguration.
 
 Usage::
 
@@ -30,8 +30,8 @@ from typing import Dict, List, Optional, Sequence, Tuple
 import numpy as np
 import pandas as pd
 
-# Compute nodes have no display; pick the non-interactive backend before pyplot
-# is imported anywhere, so report generation can never block or fail on it.
+# Compute nodes have no display; select the non-interactive backend before
+# pyplot is imported anywhere.
 import matplotlib
 
 matplotlib.use("Agg")
@@ -120,10 +120,9 @@ def load_run(out_dir: Path) -> RunData:
 def lineage(run: RunData, row: pd.Series) -> List[dict]:
     """Ancestry of one candidate, oldest first.
 
-    Each promoted seed records the ``parent_seed_id`` it descended from, so a
-    final mutant can be walked back to the wildtype. A seed with
-    ``round_index == k`` earned its promotion from how it scored as a candidate
-    in round ``k - 1``, so its metrics are plotted against that earlier round.
+    Each promoted seed records its ``parent_seed_id``, so a final mutant walks
+    back to the wildtype. A seed with ``round_index == k`` was scored as a
+    candidate in round ``k - 1``, so its metrics belong to that round.
     """
     chain: List[dict] = [{
         "round": int(row["round"]),
@@ -176,8 +175,8 @@ def pareto_front(frame: pd.DataFrame, metrics, directions) -> np.ndarray:
 def rank_candidates(run: RunData) -> pd.DataFrame:
     """One row per unique mutant, best first, with Pareto and rank annotations."""
     frame = run.frame.copy()
-    # The same mutant can be folded in several rounds (cache hits); keep the
-    # earliest appearance, which is where it was actually produced.
+    # The same mutant can appear in several rounds (cache hits); keep the
+    # earliest, which is where it was produced.
     if "mutations" in frame.columns:
         frame = frame.sort_values("round").drop_duplicates(subset="mutations", keep="first")
 
@@ -309,9 +308,8 @@ def plot_progression(run: RunData, save_to: Optional[Path] = None) -> str:
                                (max(best_so_far[-1], best) if better_high
                                 else min(best_so_far[-1], best)))
             # Per-round median, not a running one: it tracks whether the whole
-            # population is improving, which the cumulative best cannot show
-            # (that line is monotone by construction and can be carried by a
-            # single lucky mutant).
+            # population is improving, which the monotone cumulative best cannot
+            # show.
             medians.append(vals.median())
             xs.append(rnd)
         if xs:
@@ -376,8 +374,8 @@ def plot_lineage(run: RunData, ranked: pd.DataFrame, top: int = 6,
                  save_to: Optional[Path] = None) -> Optional[str]:
     """How each of the best final mutants got there, ancestor by ancestor.
 
-    A flat or wandering trace means the later rounds added mutations without
-    buying anything; a monotone climb means the loop was genuinely optimizing.
+    A flat or wandering trace means later rounds added mutations without buying
+    anything; a monotone climb means the loop was optimizing.
     """
     if not run.seeds:
         return None
@@ -542,7 +540,7 @@ def build_html(run: RunData, ranked: pd.DataFrame, images: Dict[str, Optional[st
 
 
 def write_fasta(ranked: pd.DataFrame, path: Path, top: int, run: RunData) -> Optional[Path]:
-    """Top mutants as FASTA, ready to hand to whatever comes next."""
+    """Top mutants as FASTA."""
     if "sequence" not in ranked.columns:
         return None
     lines = []
@@ -567,9 +565,9 @@ def generate(out_dir: Path, top: int = 25) -> Path:
     plots_dir = report_dir / "plots"
     plots_dir.mkdir(parents=True, exist_ok=True)
 
-    # Every scored row, all rounds, no dedup -- the raw combined record.
+    # Every scored row, all rounds, no dedup.
     run.frame.to_csv(report_dir / "all_candidates.csv", index=False)
-    # Unique mutants, ranked, Pareto flagged -- the answer table.
+    # Unique mutants, ranked, Pareto flagged.
     ranked.drop(columns=[c for c in ("_score",) if c in ranked.columns]) \
           .to_csv(report_dir / "best_mutants.csv", index=False)
     fasta = write_fasta(ranked, report_dir / "top_sequences.fasta", top, run)

@@ -362,8 +362,8 @@ def _score_seqs_batched(
     scores_list = []
     for idx in range(0, len(sequences), max_batch_size):
         batch = sequences[idx : idx + max_batch_size]
-        # The mutation search only consumes the scalar scores; skip retaining the
-        # per-sequence tensors so GPU memory does not grow with the candidate count.
+        # Only the scalar scores are used here; skipping the per-sequence
+        # tensors keeps GPU memory flat in the candidate count.
         batch_scores, _, _ = score_seqs(
             model,
             cfg,
@@ -406,11 +406,10 @@ def _score_sequences(
         chain_order = pdb_entry["chain_order"]
         chain_lengths = _chain_lengths(pdb_entry)
         wt_sequence = pdb_entry["seq"]
-        # With binder_chain set, stability is taken from that chain's isolated
-        # (unbound) partition energy inside the partition loop below, rather than
-        # from the whole complex. That substitution only happens when binding
-        # partitions are scored, so fall back to the complex for energy_mode
-        # "stability", which never enters that loop.
+        # With binder_chain set, stability comes from that chain's isolated
+        # (unbound) partition energy in the partition loop below. That loop is
+        # not entered for energy_mode "stability", which falls back to the
+        # whole complex.
         stability_scores = None
         if binder_chain is None or energy_mode == "stability":
             scores, _, _ = _score_seqs_batched(
@@ -481,10 +480,9 @@ def _score_sequences(
             )
 
             if binder_chain is not None and binder_chain in partition:
-                # partition_scores covers only partition_indices; scatter back to
-                # full length so stability aligns with binding_scores_np. The
-                # rest are unmutated within this partition, so their ddG is 0 --
-                # the same convention unbound_scores uses.
+                # partition_scores covers only partition_indices; scatter back
+                # to full length so stability aligns with binding_scores_np. The
+                # rest are unmutated within this partition, so their ddG is 0.
                 binder_stability = np.zeros(len(sequences), dtype=np.float32)
                 binder_stability[partition_indices] = (
                     partition_scores.squeeze(0).cpu().numpy()
@@ -505,14 +503,13 @@ def _score_sequences(
             all_binding.append(binding_scores_np)
         elif energy_mode == "both":
             if rank_by == "binding":
-                # Rank purely by binding score (lower is better); stability is
-                # still computed and tracked, but does not affect the ordering.
+                # Binding score only (lower is better); stability is still
+                # tracked but does not affect the ordering.
                 all_scores.append(binding_scores_np)
             elif rank_by == "pareto":
-                # Rank by Pareto front index (non-dominated sorting over
-                # stability + binding, both minimized). Ties within a front are
-                # broken by binding score so the keep_n cutoff prefers low
-                # binding. Lower composite = better.
+                # Pareto front index over (stability, binding), both minimized.
+                # Ties within a front break by binding score, so the keep_n
+                # cutoff prefers low binding. Lower composite = better.
                 front_ranks = _pareto_rank(stability_scores, binding_scores_np).astype(float)
                 binding_tiebreak = _rank_scores(binding_scores_np).astype(float)
                 all_scores.append(front_ranks + binding_tiebreak / (len(binding_tiebreak) + 1.0))
@@ -554,11 +551,9 @@ def _pareto_front(stability_scores: np.ndarray, binding_scores: np.ndarray) -> n
     strict inequality in at least one objective. Points with identical
     coordinates do not dominate one another, so duplicate optima are all kept.
 
-    This is an O(n log n) skyline sweep that is exactly equivalent to the naive
-    O(n^2) pairwise check: a point is dominated iff (a) some point of strictly
-    smaller stability has binding <= its binding, or (b) some point of equal
-    stability has strictly smaller binding (i.e. its binding exceeds the minimum
-    binding within its own stability group).
+    O(n log n) skyline sweep: a point is dominated iff (a) some point of
+    strictly smaller stability has binding <= its binding, or (b) its binding
+    exceeds the minimum binding within its own stability group.
     """
     n = len(stability_scores)
     front = np.zeros(n, dtype=bool)
@@ -600,19 +595,15 @@ def _pareto_rank(stability_scores: np.ndarray, binding_scores: np.ndarray) -> np
     """Assign each point a Pareto front index (0 = non-dominated, higher = worse).
 
     Both objectives are minimized (lower stability and lower binding are better),
-    matching :func:`_pareto_front`. The front index equals the result of
-    fast non-dominated sorting (NSGA-II): front 0 is the non-dominated set,
-    front 1 is non-dominated once front 0 is removed, and so on.
+    matching :func:`_pareto_front`. The front index equals the result of fast
+    non-dominated sorting (NSGA-II): front 0 is the non-dominated set, front 1 is
+    non-dominated once front 0 is removed, and so on.
 
-    Implementation is O(n log n): a point's front index is one more than the
-    largest front index among the points that dominate it (or 0 if none). The
-    dominators of a point all precede it when points are processed in
-    (stability, binding) ascending order, so the recurrence can be evaluated in
-    that order while a Fenwick tree keeps the running maximum front index over
-    every binding value <= the current one. Points that share identical
-    (stability, binding) coordinates do not dominate one another, so they are
-    processed as a group (queried before any of them is inserted) and receive
-    the same front index -- exactly as in the naive NSGA-II peeling.
+    O(n log n): a point's front index is one more than the largest front index
+    among its dominators, all of which precede it in (stability, binding)
+    ascending order, so a Fenwick tree over binding values evaluates the
+    recurrence in one pass. Points sharing identical coordinates do not dominate
+    one another and are processed as a group, receiving the same front index.
     """
     n = len(stability_scores)
     if n == 0:
@@ -642,8 +633,7 @@ def _pareto_rank(stability_scores: np.ndarray, binding_scores: np.ndarray) -> np
 
     front_sorted = np.empty(n, dtype=int)
     for gs, ge, br in zip(group_start.tolist(), group_end.tolist(), group_rank.tolist()):
-        # Query max front index among dominators: earlier groups with binding
-        # rank <= br (all such groups have stability <= and thus dominate).
+        # Max front index among dominators: earlier groups with binding rank <= br.
         idx = br
         best = NEG
         while idx > 0:

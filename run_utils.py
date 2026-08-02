@@ -877,7 +877,7 @@ def score_seqs(model, cfg, pdb_data, nrgs, seqs, partition=None, track_progress=
         seqs = np.insert(seqs, 0, wt_seq)
     # Transform nrgs and seqs to tensors. Keep the full inputs on the host and
     # move only the current batch to the GPU, so peak device memory scales with
-    # the batch size rather than the total number of sequences.
+    # the batch size rather than the sequence count.
     nrgs = torch.from_numpy(np.array(nrgs)).to(dtype=torch.float32).unsqueeze(0)
     seqs = etab_utils.seqs_to_tensor(seqs, dev='cpu').unsqueeze(0)
 
@@ -893,10 +893,9 @@ def score_seqs(model, cfg, pdb_data, nrgs, seqs, partition=None, track_progress=
         nrgs_batch = nrgs[:, batch:batch+batch_size].to(cfg.dev)
         batch_scores, batch_seqs, batch_refs = etab_utils.calc_eners(etab, E_idx, seqs_batch, nrgs_batch, filter=cfg.inference.filter)
         scores.append(batch_scores)
-        # scored_seqs/reference_scores are only needed by callers that inspect the
-        # per-sequence outputs (e.g. energy_prediction). When keep_seqs is False we
-        # skip accumulating them, which otherwise holds a full copy of every
-        # sequence on the GPU and defeats the purpose of batching.
+        # scored_seqs/reference_scores are only needed by callers that inspect
+        # the per-sequence outputs (e.g. energy_prediction); accumulating them
+        # holds a full copy of every sequence on the GPU.
         if keep_seqs:
             scored_seqs.append(batch_seqs)
             reference_scores.append(batch_refs)

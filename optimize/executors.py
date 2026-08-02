@@ -4,9 +4,8 @@
 submits them as a single sbatch array and polls to completion. Both present the
 same interface so the round loop is unaware of where work actually runs.
 
-The SLURM backend reuses the idiom already established by
-``submit_all_mutation_af3_pipelines.sh`` / ``submit_mutation_af3_pipeline_array.sh``:
-a manifest file with one job per line, indexed by ``SLURM_ARRAY_TASK_ID``.
+The SLURM backend uses the same idiom as the repository's submit scripts: a
+manifest file with one job per line, indexed by ``SLURM_ARRAY_TASK_ID``.
 """
 
 from __future__ import annotations
@@ -174,8 +173,7 @@ class SlurmExecutor(_BaseExecutor):
         manifest = self.work_dir / f"manifest_{stamp}.txt"
         script = self.work_dir / f"array_{stamp}.sh"
 
-        # One job per line; the array task indexes into it, exactly as the
-        # existing submit_mutation_af3_pipeline_array.sh does.
+        # One job per line; the array task indexes into it.
         with open(manifest, "w", encoding="utf-8", newline="\n") as handle:
             for job in jobs:
                 handle.write(

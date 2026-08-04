@@ -15,7 +15,7 @@ Code in this file was originally written by or adapted from:
 
     4) Birnbaum and Keating "Beyond native sequence recovery: Improved modeling of the
     sequence-energy landscape of protein structures"
-    bioRxiv, 2026. doi:10.64898/2026.01.14.699067
+    PNAS, 2026. doi:10.1073/pnas.2535494123
        - Code: https://github.com/KeatingLab/PottsMPNN
 """
 

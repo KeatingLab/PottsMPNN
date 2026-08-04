@@ -5,7 +5,6 @@ seaborn
 pyyaml
 biopython
 omegaconf
-py3dmol
 tqdm
 edlib
 python-dateutil

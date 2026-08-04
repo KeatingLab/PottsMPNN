@@ -15,8 +15,10 @@ There are three ways to run the model, ranging from easiest (cloud-based) to adv
 
 Run the model entirely in your browser using Google's free GPU resources. No local installation is required.
 
-* **Sequence Generation:** [Use this file to design new sequences for a backbone](https://colab.research.google.com/drive/1Jx447uZHwi_pvLbzYtdL961vsatAjlnd?usp=sharing)
-* **Energy Prediction:** [Use this file to predict ΔΔG values for specific mutations.](https://colab.research.google.com/drive/1nAWcQXW_GQkyyN0X2s0G68w-8y0wDbpx?usp=sharing)
+* **Sequence Generation:** [Use this file to design new sequences for a backbone](https://colab.research.google.com/github/KeatingLab/PottsMPNN/blob/main/sample_seqs.ipynb)
+* **Energy Prediction:** [Use this file to predict ΔΔG values for specific mutations.](https://colab.research.google.com/github/KeatingLab/PottsMPNN/blob/main/energy_prediction.ipynb)
+
+These links open the notebooks in this repository directly from GitHub, so the notebook and the code it runs are always the same version. The first cell installs the dependencies Colab does not ship and clones the repository; it takes a few minutes because the repository includes the model weights. Colab opens a GitHub notebook read-only, so use *File → Save a copy in Drive* if you want to keep your edits.
 
 ### Level 2: Local Jupyter Notebooks
 
@@ -31,6 +33,8 @@ jupyter notebook
 
 2. Open `sample_seqs.ipynb` for sequence generation.
 3. Open `energy_prediction.ipynb` for mutational scoring.
+
+These are the same notebooks the Colab links above open. Their first cell only does anything when it detects a Colab runtime, so running it locally is a no-op and you can leave it in place.
 
 ### Level 3: Command Line Interface
 

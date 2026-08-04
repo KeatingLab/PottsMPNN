@@ -1,5 +1,5 @@
 import torch
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Sampler
 import csv
 from dateutil import parser
 import numpy as np
@@ -13,9 +13,14 @@ import re
 from typing import Optional
 import dataclasses
 import edlib
+import sys
 from Bio.PDB import PDBParser, is_aa
 from Bio.SeqUtils import seq1
-from model_utils import featurize
+
+# The featurizer is shared with inference and lives in the repository root.
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from data_utils import featurize
 # Define the 14 standard atom names (N, CA, C, O, CB + most common sidechain atoms)
 ATOM_ORDER = ['N', 'CA', 'C', 'O', 'CB', 'CG', 'CG1', 'CG2',
               'CD', 'CD1', 'CD2', 'CE', 'CE1', 'CE2']
@@ -62,22 +67,13 @@ class StructureDataset():
         return self.data[idx]
 
 class StructureSampler(Sampler):
-    def __init__(self, dataset, batch_size=100, device='cpu', flex_type="", augment_eps=0, replicate=1, esm=None, batch_converter=None, esm_embed_layer=36, esm_embed_dim=2560, one_hot=False, openfold_backbone=False, msa_seqs=False, msa_batch_size=1):
+    def __init__(self, dataset, batch_size=100, device='cpu', msa_seqs=False, msa_batch_size=1):
         self.size = len(dataset)
         self.lengths = [len(dataset[i]['seq']) for i in range(self.size)]
         self.dataset = dataset
         self.batch_size = batch_size
         self.device = device
-        self.flex_type = flex_type
-        self.augment_eps = augment_eps
-        self.replicate = replicate
         self.epoch = -1
-        self.esm = esm
-        self.batch_converter = batch_converter
-        self.esm_embed_layer = esm_embed_layer
-        self.esm_embed_dim = esm_embed_dim
-        self.one_hot = one_hot
-        self.openfold_backbone = openfold_backbone
         self.msa_seqs = msa_seqs
         self.msa_batch_size = msa_batch_size
         self._cluster()

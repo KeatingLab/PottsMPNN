@@ -10,7 +10,6 @@ Code in this file was originally written by or adapted from:
        - Code: https://github.com/KeatingLab/PottsMPNN
 """
 
-from tabnanny import verbose
 import torch
 import torch.nn.functional as F
 import copy
@@ -31,46 +30,8 @@ from Bio.PDB import PDBParser, PDBIO
 from Bio.Data.IUPACData import protein_letters_1to3
 import etab_utils as etab_utils
 from data_utils import parse_PDB_seq_only, tied_featurize
-
-def gather_nodes(nodes, neighbor_idx):
-    """
-    Gather neighbor node features for each node in a batch.
-
-    This helper converts node features shaped `[B, N, C]` and neighbor indices
-    shaped `[B, N, K]` into neighbor features shaped `[B, N, K, C]`.
-
-    Parameters
-    ----------
-    nodes : torch.Tensor, shape (B, N, C)
-        Node feature tensor where B=batch, N=num_nodes, C=channels.
-    neighbor_idx : torch.Tensor, shape (B, N, K)
-        Integer indices of neighbors for each node.
-
-    Returns
-    -------
-    torch.Tensor, shape (B, N, K, C)
-        Gathered neighbor features.
-    """
-    # Flatten neighbor indices per batch: [B, N, K] -> [B, N*K]
-    neighbors_flat = neighbor_idx.view((neighbor_idx.shape[0], -1))
-    # Expand index to select all feature channels: [B, N*K, C]
-    neighbors_flat = neighbors_flat.unsqueeze(-1).expand(-1, -1, nodes.size(2))
-    # Gather across node dimension and reshape back to [B, N, K, C]
-    neighbor_features = torch.gather(nodes, 1, neighbors_flat)
-    neighbor_features = neighbor_features.view(list(neighbor_idx.shape)[:3] + [-1])
-    return neighbor_features
-
-def cat_neighbors_nodes(h_nodes, h_neighbors, E_idx):
-    """
-    Concatenate edge/neighbour features with gathered node features.
-
-    This is a small convenience wrapper that gathers node features for the
-    neighbor indices `E_idx` and concatenates them with precomputed
-    `h_neighbors` along the last dimension.
-    """
-    h_nodes = gather_nodes(h_nodes, E_idx)
-    h_nn = torch.cat([h_neighbors, h_nodes], -1)
-    return h_nn
+# Re-exported for callers that import these graph helpers from run_utils.
+from potts_mpnn_utils import cat_neighbors_nodes, gather_nodes
 
 def optimize_sequence(seq, etab, E_idx, mask, chain_mask, opt_type, seq_encoder, optimization_temp=0.0001,
                       constant=None, constant_bias=None, bias_by_res=None,

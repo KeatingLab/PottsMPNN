@@ -123,34 +123,40 @@ def nlcpl(etab, E_idx, S, mask, fixed_denom=0.0):
 
     return nlcpl_return, log_edge_probs, int(n_edges)
 
-def potts_singlesite_loss(etab, E_idx, S, mask, vocab, weight=0.1, from_val=False):
+def potts_singlesite_loss(etab, E_idx, S, mask, vocab, weight=0.1, from_val=False, fixed_denom=2000.0):
+    """ Negative log probabilities of the single-site marginals of the Potts model
+
+        `vocab` is 21 for single sequences and 22 when MSA sequences add a gap
+        token. `fixed_denom` normalizes the loss by a constant number of residues;
+        set it to 0 to normalize by the number of unmasked residues instead.
+    """
     ref_seqs = S
     n_batch, L, k, _ = etab.shape
     etab = etab.unsqueeze(-1).view(n_batch, L, k, 20, 20)
 
-    # X is encoded as 20 so lets just add an extra row/col of zeros
-    pad = (0, 1, 0, 1)
+    # X is encoded as 20 (and gaps as 21) so lets just add extra rows/cols of zeros
+    pad = (0, vocab - 20, 0, vocab - 20)
     etab = F.pad(etab, pad, "constant", 0)
 
     isnt_x_aa = (torch.logical_and(ref_seqs != 20, ref_seqs != 21)).float() # b x L
     full_mask = mask * isnt_x_aa
 
     # separate selfE and pairE since we have to treat selfE differently
-    self_etab = torch.diagonal(etab[:, :, 0:1].squeeze(2), dim1=-2, dim2=-1) # b x L x 22
-    pair_etab = etab[:, :, 1:] # b x L x 29 x 22 x 22
+    self_etab = torch.diagonal(etab[:, :, 0:1].squeeze(2), dim1=-2, dim2=-1) # b x L x vocab
+    pair_etab = etab[:, :, 1:] # b x L x 29 x vocab x vocab
     # E_idx for all but self
     E_idx_jn = E_idx[:, :, 1:] # b x L x 29
     # idx matrix to gather the identity at all other residues given a residue of focus
     E_aa = torch.gather(ref_seqs.unsqueeze(-1).expand(-1, -1, k - 1), 1, E_idx_jn) # b x L x 29
     # expand the matrix so we can gather pair energies
-    E_aa = E_aa.view(list(E_idx_jn.shape) + [1, 1]).expand(-1, -1, -1, 21, -1) # b x L x 29 x 22 x 1
-    # gather the 22 energies for each edge based on E_aa
-    pair_nrgs_jn = torch.gather(pair_etab, 4, E_aa).squeeze(-1) # b x L x 29 x 22
+    E_aa = E_aa.view(list(E_idx_jn.shape) + [1, 1]).expand(-1, -1, -1, vocab, -1) # b x L x 29 x vocab x 1
+    # gather the vocab energies for each edge based on E_aa
+    pair_nrgs_jn = torch.gather(pair_etab, 4, E_aa).squeeze(-1) # b x L x 29 x vocab
     # sum_(u != n,m) E_p(a_i,n; A_u)
-    sum_pair_nrgs_jn = torch.sum(pair_nrgs_jn, dim=2) # b x L x 22
+    sum_pair_nrgs_jn = torch.sum(pair_nrgs_jn, dim=2) # b x L x vocab
 
     composite_logits = self_etab + sum_pair_nrgs_jn
-    log_probs = torch.log_softmax(-composite_logits, dim=-1) # b x L x 22
+    log_probs = torch.log_softmax(-composite_logits, dim=-1) # b x L x vocab
 
     if from_val:
         criterion = torch.nn.NLLLoss(reduction='none')
@@ -169,7 +175,10 @@ def potts_singlesite_loss(etab, E_idx, S, mask, vocab, weight=0.1, from_val=Fals
         S_onehot = S_onehot / S_onehot.sum(-1, keepdim=True)
 
         loss = -(S_onehot * log_probs).sum(-1)
-        loss_av = torch.sum(loss * full_mask) / 2000.0 #fixed 
+        if fixed_denom > 0:
+            loss_av = torch.sum(loss * full_mask) / fixed_denom
+        else:
+            loss_av = torch.sum(loss * full_mask) / torch.sum(full_mask)
         return loss, loss_av
 
 class StructureDataset():
@@ -312,11 +321,29 @@ def gather_edges(edges, neighbor_idx):
     return edge_features
 
 def gather_nodes(nodes, neighbor_idx):
-    # Features [B,N,C] at Neighbor indices [B,N,K] => [B,N,K,C]
-    # Flatten and expand indices per batch [B,N,K] => [B,NK] => [B,NK,C]
+    """
+    Gather neighbor node features for each node in a batch.
+
+    This helper converts node features shaped `[B, N, C]` and neighbor indices
+    shaped `[B, N, K]` into neighbor features shaped `[B, N, K, C]`.
+
+    Parameters
+    ----------
+    nodes : torch.Tensor, shape (B, N, C)
+        Node feature tensor where B=batch, N=num_nodes, C=channels.
+    neighbor_idx : torch.Tensor, shape (B, N, K)
+        Integer indices of neighbors for each node.
+
+    Returns
+    -------
+    torch.Tensor, shape (B, N, K, C)
+        Gathered neighbor features.
+    """
+    # Flatten neighbor indices per batch: [B, N, K] -> [B, N*K]
     neighbors_flat = neighbor_idx.view((neighbor_idx.shape[0], -1))
+    # Expand index to select all feature channels: [B, N*K, C]
     neighbors_flat = neighbors_flat.unsqueeze(-1).expand(-1, -1, nodes.size(2))
-    # Gather and re-pack
+    # Gather across node dimension and reshape back to [B, N, K, C]
     neighbor_features = torch.gather(nodes, 1, neighbors_flat)
     neighbor_features = neighbor_features.view(list(neighbor_idx.shape)[:3] + [-1])
     return neighbor_features
@@ -328,6 +355,13 @@ def gather_nodes_t(nodes, neighbor_idx):
     return neighbor_features
 
 def cat_neighbors_nodes(h_nodes, h_neighbors, E_idx):
+    """
+    Concatenate edge/neighbour features with gathered node features.
+
+    This is a small convenience wrapper that gathers node features for the
+    neighbor indices `E_idx` and concatenates them with precomputed
+    `h_neighbors` along the last dimension.
+    """
     h_nodes = gather_nodes(h_nodes, E_idx)
     h_nn = torch.cat([h_neighbors, h_nodes], -1)
     return h_nn

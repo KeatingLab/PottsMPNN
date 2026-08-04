@@ -729,8 +729,14 @@ def loss_nll(S, log_probs, mask):
     loss_av = torch.sum(loss * mask) / torch.sum(mask)
     return loss, loss_av, true_false
 
-def loss_smoothed(S, log_probs, mask, weight=0.1, vocab=21):
-    """ Negative log probabilities """
+def loss_smoothed(S, log_probs, mask, weight=0.1, vocab=21, fixed_denom=0.0):
+    """ Negative log probabilities
+
+        `vocab` is 21 for single sequences and 22 when MSA sequences add a gap
+        token. `fixed_denom` normalizes the loss by a constant number of residues,
+        which keeps the gradient scale stable across batches during training; the
+        default of 0 normalizes by the number of unmasked residues instead.
+    """
     S_onehot = torch.nn.functional.one_hot(S, vocab).float()
 
     # Label smoothing
@@ -738,5 +744,8 @@ def loss_smoothed(S, log_probs, mask, weight=0.1, vocab=21):
     S_onehot = S_onehot / S_onehot.sum(-1, keepdim=True)
 
     loss = -(S_onehot * log_probs).sum(-1)
-    loss_av = torch.sum(loss * mask) / torch.sum(mask)
+    if fixed_denom > 0:
+        loss_av = torch.sum(loss * mask) / fixed_denom
+    else:
+        loss_av = torch.sum(loss * mask) / torch.sum(mask)
     return loss, loss_av

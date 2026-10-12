@@ -131,8 +131,6 @@ We provide vanilla and soluble model weights. For each, we provide three version
 > **Note — the Potts iterative optimization is off by default.**
 >
 > Setting `optimization_mode: "potts"` runs an iterative sweep over designable positions that drives the sampled sequence toward lower Potts energy. It helps in some cases, but **for binder design it can be very bad.** It is therefore opt-in rather than the default: turn it on deliberately, and check the result against your own metrics instead of assuming it is an improvement.
->
-> *(Placeholder — to be expanded with specifics on when it helps and how it fails for binders.)*
 * **`inference.optimization_temperature`**: (float) Optimization temperature. Lower values (e.g., 0.0 or 0.1) produce more probable sequences; higher values (e.g., 1.0) add diversity. Note that the model was only benchmarked with this temperature set to 0.0.
 * **`inference.binding_energy_optimization`**: How to optimize using binding energies:
 * `"none"`: Optimize stability only.

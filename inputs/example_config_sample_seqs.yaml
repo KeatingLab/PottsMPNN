@@ -19,7 +19,7 @@ inference:
   skip_gaps: false
   fix_decoding_order: true
   decoding_order_offset: 0
-  optimization_mode: potts
+  optimization_mode: none
   optimization_temperature: 0.0
   binding_energy_optimization: none
   binding_energy_json: null

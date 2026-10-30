@@ -117,7 +117,7 @@ We provide vanilla and soluble model weights. For each, we provide three version
 
 #### Sampling & Optimization
 
-* **`inference.num_samples`**: (int) Number of sequences to generate per structure. Must be `1` if running optimization.
+* **`inference.num_samples`**: (int) Number of sequences to generate per structure. Must be `1` if the intention is to optimize sequences in a `.pdb` or `.fasta` file (see `inference.optimize_pdb` or `inference.optimize_fasta`).
 * **`inference.temperature`**: (float) Sampling temperature. Lower values (e.g., 0.1) produce more probable sequences; higher values (e.g., 1.0) add diversity.
 * **`inference.noise`**: (float) Amont of noise to add to structures during inference (model only evaluated with 0 noise).
 * **`inference.skip_gaps`**: (bool) Whether to skip gaps in structure (default False, but for some downstream applications like forward folding it can be convenient to set to True).
